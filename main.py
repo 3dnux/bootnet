@@ -6,11 +6,13 @@ import json
 import math
 import sys
 import time
+import random
 import urllib.parse
 import urllib.request
+import urllib.error
 from typing import Any, Dict, List, Optional, Tuple
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 
 
 # ----------------------------- Utilidades ------------------------------------
@@ -71,9 +73,14 @@ def fmt_usd(x: Optional[float]) -> str:
 
 
 def fmt_pct(x: Optional[float]) -> str:
-    if x is None or math.isnan(x):
+    if x is None:
         return "-"
-    return f"{x*100:.2f}%"
+    try:
+        if not math.isfinite(x):
+            return "-"
+        return f"{x*100:.2f}%"
+    except Exception:
+        return "-"
 
 
 # ----------------------------- Cliente CoinGecko ------------------------------
@@ -97,21 +104,42 @@ class CoinGeckoClient:
                 req = urllib.request.Request(url)
                 req.add_header("Accept", "application/json")
                 req.add_header("User-Agent", self.user_agent)
-                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                    status = resp.getcode()
-                    data = resp.read()
-                    if status == 200:
-                        return json.loads(data.decode("utf-8"))
-                    elif status in (429, 500, 502, 503, 504):
-                        # backoff exponencial simple
-                        sleep_s = 1.5 * (2 ** attempt)
-                        time.sleep(sleep_s)
+                try:
+                    with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                        status = resp.getcode()
+                        data = resp.read()
+                        if status == 200:
+                            return json.loads(data.decode("utf-8"))
+                        elif status in (429, 500, 502, 503, 504):
+                            retry_after = resp.headers.get("Retry-After")
+                            base_sleep = 1.5 * (2 ** attempt)
+                            if retry_after:
+                                try:
+                                    base_sleep = max(base_sleep, float(retry_after))
+                                except Exception:
+                                    pass
+                            jitter = random.uniform(0.1, 0.5)
+                            time.sleep(base_sleep + jitter)
+                            continue
+                        else:
+                            raise RuntimeError(f"HTTP {status} for {url}")
+                except urllib.error.HTTPError as he:
+                    status = getattr(he, "code", None)
+                    if status in (429, 500, 502, 503, 504):
+                        retry_after = he.headers.get("Retry-After") if hasattr(he, "headers") else None
+                        base_sleep = 1.5 * (2 ** attempt)
+                        if retry_after:
+                            try:
+                                base_sleep = max(base_sleep, float(retry_after))
+                            except Exception:
+                                pass
+                        jitter = random.uniform(0.1, 0.5)
+                        time.sleep(base_sleep + jitter)
                         continue
-                    else:
-                        raise RuntimeError(f"HTTP {status} for {url}")
+                    raise
             except Exception as e:
                 last_err = e
-                time.sleep(1.0 + attempt)
+                time.sleep(1.0 + attempt + random.uniform(0.0, 0.25))
         raise RuntimeError(f"Fallo al obtener {url}: {last_err}")
 
     def categories_list(self) -> List[Dict[str, Any]]:
@@ -180,6 +208,20 @@ class CoinGeckoClient:
             )
         except Exception:
             return None
+
+    def coin_tickers(self, coin_id: str, page: int = 1) -> List[Dict[str, Any]]:
+        try:
+            data = self._get(
+                f"coins/{coin_id}/tickers",
+                {
+                    "page": page,
+                },
+            )
+            if isinstance(data, dict) and isinstance(data.get("tickers"), list):
+                return data["tickers"]
+            return []
+        except Exception:
+            return []
 
 
 # ----------------------------- Indicadores -----------------------------------
@@ -379,10 +421,21 @@ def compute_signals(current_price: float,
     mom_s = momentum_score(rsi_val)
     trd_s = trend_score(sma20_val, sma50_val)
 
-    # Pesos base y ajustes según flags CLI
+    # Pesos base y ajustes según flags CLI (con autoajuste social opcional)
     w_trd = 0.30
     w_mom = 0.25
-    w_soc = 0.0 if disable_social else (0.20 if social_weight is None else clamp(social_weight, 0.0, 0.6))
+    auto_soc_note = None
+    if disable_social:
+        w_soc = 0.0
+    else:
+        if social_weight is None:
+            # Autoajuste: más peso social cuando el puntaje social y la liquidez son altos y el riesgo es elevado, y cuando la capitalización es baja.
+            base_soc = 0.12 + 0.28 * soc_s + 0.10 * liq_s + 0.10 * (1.0 - risk_s)
+            small_cap_boost = 0.10 if (market_cap is not None and market_cap > 0 and market_cap < 50_000_000) else 0.0
+            w_soc = clamp(base_soc + small_cap_boost, 0.10, 0.50)
+            auto_soc_note = f"Peso social autoajustado a {w_soc:.2f} según señales sociales, liquidez, riesgo y capitalización."
+        else:
+            w_soc = clamp(social_weight, 0.0, 0.6)
     w_liq = 0.15
     w_risk = 0.10
     w_sum = max(1e-9, (w_trd + w_mom + w_soc + w_liq + w_risk))
@@ -434,6 +487,13 @@ def compute_signals(current_price: float,
 
     if avoid:
         action = "Evitar"
+
+    # Anotar autoajuste de peso social si aplica
+    if auto_soc_note:
+        try:
+            reasons.append(auto_soc_note)
+        except Exception:
+            pass
 
     # Niveles guía: basados en volatilidad reciente
     vol = vol20 or 0.05
@@ -770,6 +830,39 @@ def fetch_markets(client: CoinGeckoClient, vs: str, top: int) -> List[Dict[str, 
     return markets[:top]
 
 
+def is_listed_on_bit2me(client: CoinGeckoClient, coin_id: str) -> bool:
+    """Comprueba vía CoinGecko si una moneda tiene algún ticker en el exchange Bit2Me.
+    La verificación es por nombre o identificador del exchange, insensible a mayúsculas.
+    """
+    if not coin_id:
+        return False
+    try:
+        tickers = client.coin_tickers(coin_id)
+        for t in tickers:
+            mkt = t.get("market") or {}
+            name = (mkt.get("name") or "").lower()
+            ident = (mkt.get("identifier") or "").lower()
+            if "bit2me" in name or "bit2me" in ident:
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def filter_bit2me_markets(client: CoinGeckoClient, markets: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Filtra mercados a los que estén listados en Bit2Me. Devuelve (filtrados, ids_excluidos)."""
+    filtered: List[Dict[str, Any]] = []
+    removed: List[str] = []
+    for m in markets:
+        cid = m.get("id")
+        if is_listed_on_bit2me(client, cid):
+            filtered.append(m)
+        else:
+            if cid:
+                removed.append(cid)
+    return filtered, removed
+
+
 def analyze_markets(client: CoinGeckoClient, markets: List[Dict[str, Any]], vs: str, days: int, social_weight: Optional[float] = None, disable_social: bool = False, ai_mode: Optional[str] = "advanced", ai_weight: float = 0.35) -> List[Dict[str, Any]]:
     # Normalizar flags IA
     ai_mode_l = (ai_mode or "advanced").lower()
@@ -805,6 +898,7 @@ def analyze_markets(client: CoinGeckoClient, markets: List[Dict[str, Any]], vs: 
             chart = None
 
         closes: List[float] = []
+        used_fallback = False
         if chart and isinstance(chart.get("prices"), list):
             closes = [float(p[1]) for p in chart["prices"] if isinstance(p, list) and len(p) >= 2]
             # Asegurar que no haya valores no positivos que rompan cálculos
@@ -813,6 +907,7 @@ def analyze_markets(client: CoinGeckoClient, markets: List[Dict[str, Any]], vs: 
         if not closes and price:
             # fallback mínimo con precio actual repetido (evita errores pero no da señales sólidas)
             closes = [float(price)] * max(50, days)
+            used_fallback = True
 
         analysis = compute_signals(
             price or 0.0,
@@ -824,6 +919,22 @@ def analyze_markets(client: CoinGeckoClient, markets: List[Dict[str, Any]], vs: 
             social_weight=social_weight,
             disable_social=disable_social,
         )
+        # Anotar advertencias de calidad de datos
+        try:
+            if used_fallback:
+                analysis.setdefault("reasons", []).append(
+                    "Datos de precios insuficientes: usando sustitución con precio actual repetido (menor confianza técnica)."
+                )
+            if not disable_social and comm is None:
+                analysis.setdefault("reasons", []).append(
+                    "Sin datos sociales de CoinGecko para esta moneda (componente social menos preciso)."
+                )
+            if disable_social:
+                analysis.setdefault("reasons", []).append(
+                    "Componente social desactivado por configuración del usuario."
+                )
+        except Exception:
+            pass
 
         result_item = {
             "id": coin_id,
@@ -893,6 +1004,17 @@ def analyze_markets(client: CoinGeckoClient, markets: List[Dict[str, Any]], vs: 
         except Exception:
             # si IA falla, ignorar silenciosamente para no romper el flujo
             pass
+
+    # Anotar razones globales relacionadas con IA
+    try:
+        if ai_mode_l == "off":
+            for r in results:
+                r.get("analysis", {}).setdefault("reasons", []).append("IA desactivada por configuración del usuario.")
+        elif horizon is not None and (len(X_all) < 30 or not ctx_list):
+            for r in results:
+                r.get("analysis", {}).setdefault("reasons", []).append("IA no aplicada por datos insuficientes (muestras < 30); se usa buy_score base.")
+    except Exception:
+        pass
 
     return results
 
@@ -1170,13 +1292,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--vs", type=str, default="usd", help="Moneda base para precios (por defecto usd)")
     parser.add_argument("--offline", action="store_true", help="Modo offline: no realiza solicitudes HTTP (solo muestra aviso)")
     parser.add_argument("--coins", type=str, default="", help="IDs específicos de CoinGecko separados por coma (opcional)")
-    parser.add_argument("--social-weight", dest="social_weight", type=float, default=None, help="Peso del componente social en el buy_score (0.0–0.6). Por defecto 0.20 si no se especifica.")
+    parser.add_argument("--social-weight", dest="social_weight", type=float, default=None, help="Peso del componente social en el buy_score (0.0–0.6). Si no se especifica, el peso se autoajusta (≈0.10–0.50) según señales sociales, liquidez, riesgo y capitalización.")
     parser.add_argument("--disable-social", dest="disable_social", action="store_true", help="Desactiva el componente social (solo señales técnicas/liquidez/riesgo)")
     parser.add_argument("--concentrate", dest="concentrate", action="store_true", default=True, help="Activa la concentración de capital en una sola operación cuando la mejor candidata es muy buena (por defecto activado)")
     parser.add_argument("--no-concentrate", dest="concentrate", action="store_false", help="Desactiva la concentración de capital")
     parser.add_argument("--concentrate-threshold", dest="concentrate_threshold", type=float, default=0.85, help="Umbral del buy_score (0.0–1.0) para considerar 'muy buena'. Por defecto 0.85")
     parser.add_argument("--ai-mode", dest="ai_mode", type=str, default="advanced", help="IA: off | basic | advanced (por defecto advanced)")
     parser.add_argument("--ai-weight", dest="ai_weight", type=float, default=0.35, help="Peso de la IA al combinar con buy_score (0.0–1.0). Por defecto 0.35")
+    # Filtro Bit2Me
+    parser.add_argument("--only-bit2me", dest="only_bit2me", action="store_true", default=True, help="Restringe las propuestas a monedas listadas en Bit2Me (por defecto activado).")
+    parser.add_argument("--no-bit2me", dest="only_bit2me", action="store_false", help="Desactiva el filtro de Bit2Me (analiza aunque no estén listadas).")
     # Simulación (paper trading)
     parser.add_argument("--simulate", dest="simulate", action="store_true", help="Modo simulación (paper trading) con TP/SL sobre datos reales.")
     parser.add_argument("--sim-coin", dest="sim_coin", type=str, default="", help="ID de la moneda en CoinGecko para simular (ej. pepe, shiba-inu).")
@@ -1194,6 +1319,61 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("Consulta README.md para más opciones y explicación de estrategia/TP/SL.")
         return 0
 
+    # Saneamiento y validaciones de argumentos
+    risk_use = (getattr(args, "risk", "moderado") or "moderado").lower()
+    if risk_use not in ("bajo", "moderado", "alto"):
+        print(f"Aviso: --risk '{args.risk}' no reconocido. Se usará 'moderado'.")
+        risk_use = "moderado"
+
+    top_raw = int(getattr(args, "top", 8))
+    top_use = int(min(250, max(1, top_raw)))
+    if top_use != top_raw:
+        print(f"Aviso: --top {top_raw} fuera de rango [1,250]. Ajustado a {top_use}.")
+
+    days_raw = int(getattr(args, "days", 90))
+    days_use = int(min(365, max(30, days_raw)))
+    if days_use != days_raw:
+        print(f"Aviso: --days {days_raw} ajustado a {days_use} (rango 30–365).")
+
+    vs_raw = getattr(args, "vs", "usd") or "usd"
+    vs_use = str(vs_raw).lower()
+    if vs_use != vs_raw:
+        print(f"Aviso: --vs normalizado a '{vs_use}'.")
+
+    budget_raw = float(getattr(args, "budget", 1000.0))
+    budget_use = max(0.0, budget_raw)
+    if budget_use != budget_raw:
+        print(f"Aviso: --budget negativo no válido. Ajustado a {budget_use}.")
+
+    ai_w_raw = float(getattr(args, "ai_weight", 0.35))
+    ai_weight_use = clamp(ai_w_raw, 0.0, 1.0)
+    if ai_weight_use != ai_w_raw:
+        print(f"Aviso: --ai-weight {ai_w_raw} fuera de [0.0,1.0]; ajustado a {ai_weight_use}.")
+
+    conc_thr_raw = float(getattr(args, "concentrate_threshold", 0.85))
+    concentrate_threshold_use = clamp(conc_thr_raw, 0.0, 1.0)
+    if concentrate_threshold_use != conc_thr_raw:
+        print(f"Aviso: --concentrate-threshold {conc_thr_raw} fuera de [0.0,1.0]; ajustado a {concentrate_threshold_use}.")
+
+    disable_social = bool(getattr(args, "disable_social", False))
+    social_weight_use: Optional[float]
+    if disable_social:
+        if getattr(args, "social_weight", None) not in (None, 0.0):
+            print("Aviso: --disable-social activo; se ignorará --social-weight.")
+        social_weight_use = None  # compute_signals ya forzará w_soc=0
+    else:
+        if getattr(args, "social_weight", None) is not None:
+            sw_raw = float(getattr(args, "social_weight"))
+            sw_use = clamp(sw_raw, 0.0, 0.6)
+            if sw_use != sw_raw:
+                print(f"Aviso: --social-weight {sw_raw} fuera de [0.0,0.6]; ajustado a {sw_use}.")
+            social_weight_use = sw_use
+        else:
+            social_weight_use = None  # activa autoajuste
+
+    concentrate_enabled = bool(getattr(args, "concentrate", True))
+    only_bit2me = bool(getattr(args, "only_bit2me", True))
+
     client = CoinGeckoClient()
 
     # Modo simulación (paper trading)
@@ -1207,7 +1387,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         res = simulate_trade(
             client,
             sim_coin,
-            vs=args.vs,
+            vs=vs_use,
             days=int(max(1, getattr(args, "sim_days", 30))),
             initial_balance=max(0.0, float(getattr(args, "sim_balance", 100.0))),
             tp_pct=tp,
@@ -1220,24 +1400,37 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         if args.coins.strip():
             ids = [x.strip() for x in args.coins.split(",") if x.strip()]
-            markets = client.markets_by_ids(ids, vs=args.vs)
+            markets = client.markets_by_ids(ids, vs=vs_use)
             # Si algún id no devolvió datos, intentamos unir con categoría memes
             if len(markets) < len(ids):
-                extra = fetch_markets(client, args.vs, top=max(0, args.top - len(markets)))
+                extra = fetch_markets(client, vs_use, top=max(0, top_use - len(markets)))
                 # Evitar duplicados
                 existing_ids = {m.get("id") for m in markets}
                 for e in extra:
                     if e.get("id") not in existing_ids:
                         markets.append(e)
-                markets = markets[:args.top]
+                markets = markets[:top_use]
         else:
-            markets = fetch_markets(client, args.vs, args.top)
+            markets = fetch_markets(client, vs_use, top_use)
     except Exception as e:
         print(f"Error al obtener mercados: {e}")
         return 1
 
+    # Aplicar filtro de Bit2Me si está activado
+    if only_bit2me:
+        markets_bit2me, removed_ids = filter_bit2me_markets(client, markets)
+        if not markets_bit2me:
+            print("Filtro Bit2Me: ninguna de las monedas candidatas está listada en Bit2Me. Usa --no-bit2me para desactivar este filtro.")
+        else:
+            if removed_ids:
+                try:
+                    print(f"Filtro Bit2Me: se excluyeron {len(removed_ids)} monedas no listadas en Bit2Me.")
+                except Exception:
+                    pass
+        markets = markets_bit2me
+
     try:
-        results = analyze_markets(client, markets, args.vs, max(30, args.days), social_weight=args.social_weight, disable_social=args.disable_social, ai_mode=getattr(args, 'ai_mode', 'advanced'), ai_weight=float(getattr(args, 'ai_weight', 0.35)))
+        results = analyze_markets(client, markets, vs_use, days_use, social_weight=social_weight_use, disable_social=disable_social, ai_mode=getattr(args, 'ai_mode', 'advanced'), ai_weight=ai_weight_use)
     except Exception as e:
         print(f"Error en el análisis: {e}")
         return 1
@@ -1245,16 +1438,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         allocations = sizing_recommendations(
             results,
-            max(0.0, float(args.budget)),
-            args.risk,
-            concentrate_enabled=bool(getattr(args, 'concentrate', True)),
-            concentrate_threshold=float(getattr(args, 'concentrate_threshold', 0.85))
+            budget_use,
+            risk_use,
+            concentrate_enabled=concentrate_enabled,
+            concentrate_threshold=concentrate_threshold_use
         )
     except Exception as e:
         print(f"Error al calcular asignaciones: {e}")
         allocations = []
 
-    print_report(results, allocations, max(0.0, float(args.budget)), args.risk, args.vs)
+    print_report(results, allocations, budget_use, risk_use, vs_use)
 
     return 0
 

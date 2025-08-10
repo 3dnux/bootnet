@@ -39,6 +39,7 @@ Parámetros principales:
 - `--concentrate-threshold`: umbral del `buy_score` (0.0–1.0) para considerar "muy buena" y concentrar. Por defecto 0.85.
 - `--ai-mode`: IA: `off` | `basic` | `advanced` (por defecto `advanced`).
 - `--ai-weight`: peso de la IA al combinar con `buy_score` (0.0–1.0). Por defecto 0.35.
+- `--only-bit2me` / `--no-bit2me`: restringe las propuestas a monedas listadas en Bit2Me (por defecto activado). Use `--no-bit2me` para analizar sin esta restricción.
 - `--offline`: evita llamadas HTTP y muestra un ejemplo/ayuda.
 
 Ejemplos:
@@ -220,3 +221,58 @@ Notas:
 - La simulación recorre la serie de precios y, entre puntos discretos, prioriza TP si se cruzaran TP y SL simultáneamente.
 - Si no se alcanza TP ni SL dentro del periodo, cierra al último precio y reporta el PnL real del periodo con resultado `FORCED`.
 - Este es un modelo simple de papel; no considera deslizamiento, comisiones ni liquidez real.
+
+
+## Novedades (v0.2.0)
+
+- Más inteligente en el componente social: si no especificas `--social-weight`, el bot ahora autoajusta el peso social (~0.10–0.50) según:
+  - Puntaje social observado (alcance/engagement),
+  - Liquidez relativa (volumen/MC),
+  - Riesgo (volatilidad reciente),
+  - Capitalización (mayor peso en small caps). Añade una razón en el reporte indicando el peso autoajustado.
+- Cliente CoinGecko más robusto ante límites/errores: reintentos con backoff exponencial, jitter y soporte de cabecera `Retry-After` para HTTP 429/5xx.
+- Validaciones y saneo de argumentos en CLI: el bot normaliza valores fuera de rango y avisa (por ejemplo, `--top`, `--days`, `--ai-weight`, `--concentrate-threshold`, `--vs`).
+- Señales con mayor precisión contextual:
+  - Si faltan datos de precios y se usa un fallback (precio actual repetido), se agrega una advertencia en las razones (menor confianza técnica).
+  - Si no hay datos sociales o si desactivas el componente social, se añade una nota explicativa.
+  - Si la IA no puede aplicarse por datos insuficientes, se indica en el reporte y se usa el `buy_score` base.
+- Formateo de porcentajes más seguro: evita mostrar valores no finitos (NaN/Inf).
+
+Sigue siendo software educativo. Ajusta tus parámetros y verifica la salida; ahora tendrás más avisos contextuales para decidir.
+
+
+## Ejecutar con Docker
+
+Requisitos: tener Docker instalado.
+
+Construir la imagen (desde la carpeta del proyecto):
+
+```
+docker build -t memecoins-bot .
+```
+
+Ejecutar pasando argumentos igual que con Python (los argumentos posteriores al nombre de la imagen se envían al script):
+
+```
+# Ejemplo: perfil moderado, 1200 USD, 10 monedas, 120 días de historial
+docker run --rm memecoins-bot --capital 1200 --risk moderado --top 10 --days 120
+```
+
+Modo simulación (paper trading):
+
+```
+docker run --rm memecoins-bot \
+  --simulate --sim-coin pepe --sim-days 30 \
+  --sim-balance 100 --sim-tp 10 --sim-sl 8
+```
+
+Modo offline (no realiza solicitudes HTTP):
+
+```
+docker run --rm memecoins-bot --offline
+```
+
+Notas:
+- La imagen base es `python:3.11-slim` y se instalan certificados TLS para poder consultar la API de CoinGecko vía HTTPS.
+- No hay dependencias externas (no se requiere `requirements.txt`).
+- Para actualizar a la última versión del código, vuelva a ejecutar el comando de build.

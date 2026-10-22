@@ -52,6 +52,31 @@ object Net {
         return EXTENSION_TYPES[extension] ?: "xmlhttprequest"
     }
 
+    /** Inicio de sesión de Google que vuelve a YouTube. */
+    const val SIGN_IN_URL =
+        "https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fm.youtube.com%2F"
+
+    /** User agent de la WebView sin las marcas de WebView ("; wv", "Version/4.0"): parece Chrome. */
+    fun chromeUserAgent(webViewUserAgent: String): String =
+        webViewUserAgent.replace("; wv", "").replace(Regex("Version/\\S+ "), "")
+
+    /**
+     * User agent de Firefox para Android, con la versión actual estimada
+     * (Firefox 144 salió el 14-10-2025 y saca una versión cada 4 semanas).
+     */
+    fun firefoxUserAgent(androidVersion: String, nowMillis: Long): String {
+        val firefox144 = 1_760_400_000_000L
+        val fourWeeks = 28L * 24 * 60 * 60 * 1000
+        val version = 144 + ((nowMillis - firefox144) / fourWeeks).coerceAtLeast(0)
+        return "Mozilla/5.0 (Android $androidVersion; Mobile; rv:$version.0) Gecko/$version.0 Firefox/$version.0"
+    }
+
+    /** Página con la que Google rechaza el inicio de sesión ("navegador no seguro"). */
+    fun isSignInRejected(url: String): Boolean {
+        val uri = runCatching { URI(url) }.getOrNull() ?: return false
+        return uri.host == "accounts.google.com" && uri.path.orEmpty().contains("/signin/rejected")
+    }
+
     class DataUrl(val mimeType: String, val bytes: ByteArray)
 
     /** Decodifica los `data:` que devuelve el motor como recurso de sustitución. */

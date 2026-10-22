@@ -32,6 +32,30 @@ class NetTest {
     }
 
     @Test
+    fun seHacePasarPorChromeOFirefox() {
+        val webView = "Mozilla/5.0 (Linux; Android 14; SM-S911B Build/UP1A; wv) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Version/4.0 Chrome/141.0.7390.122 Mobile Safari/537.36"
+        assertEquals(
+            "Mozilla/5.0 (Linux; Android 14; SM-S911B Build/UP1A) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/141.0.7390.122 Mobile Safari/537.36",
+            Net.chromeUserAgent(webView),
+        )
+        // 22-10-2026: 13 ciclos de 4 semanas después de Firefox 144.
+        assertEquals(
+            "Mozilla/5.0 (Android 14; Mobile; rv:157.0) Gecko/157.0 Firefox/157.0",
+            Net.firefoxUserAgent("14", 1_792_627_200_000L),
+        )
+    }
+
+    @Test
+    fun detectaElRechazoDeGoogle() {
+        assertTrue(Net.isSignInRejected("https://accounts.google.com/v3/signin/rejected?continue=x"))
+        assertTrue(Net.isSignInRejected("https://accounts.google.com/signin/rejected"))
+        assertFalse(Net.isSignInRejected("https://accounts.google.com/v3/signin/identifier"))
+        assertFalse(Net.isSignInRejected("https://evil.com/signin/rejected"))
+    }
+
+    @Test
     fun decodificaDataUrls() {
         val js = Net.parseDataUrl("data:application/javascript;base64,KGZ1bmN0aW9uKCl7fSkoKQ==")!!
         assertEquals("application/javascript", js.mimeType)

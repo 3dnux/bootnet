@@ -20,15 +20,19 @@ import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
+import android.widget.Toast
 import android.window.OnBackInvokedDispatcher
 import androidx.webkit.ServiceWorkerClientCompat
 import androidx.webkit.ServiceWorkerControllerCompat
+import androidx.webkit.UserAgentMetadata
+import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import org.json.JSONObject
@@ -120,9 +124,8 @@ class MainActivity : Activity() {
             javaScriptEnabled = true
             domStorageEnabled = true
             mediaPlaybackRequiresUserGesture = false
-            // Sin "; wv": YouTube y Google tratan mejor a un Chrome normal que a un WebView.
-            userAgentString = userAgentString.replace("; wv", "").replace(Regex("Version/\\S+ "), "")
         }
+        applyBrowserIdentity()
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
         // Que Android no rebaje la prioridad del renderizador cuando la app no se ve.
         webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
@@ -136,6 +139,50 @@ class MainActivity : Activity() {
                 override fun shouldInterceptRequest(request: WebResourceRequest) = intercept(request)
             })
         }
+    }
+
+    /**
+     * Google no deja iniciar sesión en WebViews y las reconoce por "; wv" en el user
+     * agent y la marca "Android WebView" de las Client Hints (la cabecera
+     * X-Requested-With ya no la envía WebView por defecto). Se quitan para parecer
+     * Chrome. Si aun así Google rechaza el inicio de sesión, se pasa a modo Firefox
+     * (ver onSignInRejected).
+     */
+    private fun applyBrowserIdentity() {
+        val settings = webView.settings
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.USER_AGENT_METADATA)) {
+            val metadata = WebSettingsCompat.getUserAgentMetadata(settings)
+            val brands = metadata.brandVersionList.map { brand ->
+                if (brand.brand.contains("WebView")) {
+                    UserAgentMetadata.BrandVersion.Builder(brand).setBrand("Google Chrome").build()
+                } else {
+                    brand
+                }
+            }
+            WebSettingsCompat.setUserAgentMetadata(
+                settings, UserAgentMetadata.Builder(metadata).setBrandVersionList(brands).build(),
+            )
+        }
+        settings.userAgentString = if (firefoxMode) {
+            Net.firefoxUserAgent(Build.VERSION.RELEASE, System.currentTimeMillis())
+        } else {
+            Net.chromeUserAgent(WebSettings.getDefaultUserAgent(this))
+        }
+    }
+
+    private val prefs by lazy { getSharedPreferences("shieldtube", MODE_PRIVATE) }
+
+    private var firefoxMode: Boolean
+        get() = prefs.getBoolean("firefox_mode", false)
+        set(value) = prefs.edit().putBoolean("firefox_mode", value).apply()
+
+    /** Google rechazó el inicio de sesión: se reintenta presentándose como Firefox. */
+    private fun onSignInRejected() {
+        if (firefoxMode) return
+        firefoxMode = true
+        applyBrowserIdentity()
+        Toast.makeText(this, R.string.sign_in_retry, Toast.LENGTH_LONG).show()
+        webView.loadUrl(Net.SIGN_IN_URL)
     }
 
     /** background.js: evita que YouTube se pause en segundo plano y controla el servicio. */
@@ -230,6 +277,7 @@ class MainActivity : Activity() {
 
         override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
             pageUrl = url
+            if (Net.isSignInRejected(url)) view.post { onSignInRejected() }
         }
 
         override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {

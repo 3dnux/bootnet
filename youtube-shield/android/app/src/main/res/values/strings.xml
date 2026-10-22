@@ -7,4 +7,5 @@
     <string name="play">Reproducir</string>
     <string name="pause">Pausar</string>
     <string name="stop">Cerrar</string>
+    <string name="sign_in_retry">Google rechazó el inicio de sesión. Reintentando en modo compatible…</string>
 </resources>

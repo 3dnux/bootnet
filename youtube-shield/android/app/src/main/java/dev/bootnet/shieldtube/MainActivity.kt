@@ -37,13 +37,14 @@ import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
     private lateinit var root: FrameLayout
-    private lateinit var webView: WebView
+    private lateinit var webView: KeepAliveWebView
     private lateinit var loading: View
     private var fullscreenView: View? = null
     private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
     private val worker = Executors.newSingleThreadExecutor()
     private var engineReady = false
     private var pendingUrl: String? = null
+    private var stopped = false
 
     /** URL de la página actual: origen de las peticiones que se consultan al motor. */
     @Volatile
@@ -52,7 +53,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         root = FrameLayout(this).apply { setBackgroundColor(BACKGROUND) }
-        webView = WebView(this).apply { setBackgroundColor(BACKGROUND) }
+        webView = KeepAliveWebView(this) { PlaybackService.running }.apply { setBackgroundColor(BACKGROUND) }
         loading = loadingView()
         root.addView(webView, matchParent())
         root.addView(loading, matchParent())
@@ -61,6 +62,11 @@ class MainActivity : Activity() {
         setupWebView()
         registerBack()
         requestNotificationPermission()
+        PlaybackService.onStopped = {
+            // Fin de la reproducción en segundo plano: la WebView vuelve a su estado real.
+            webView.syncWindowVisibility()
+            if (stopped) webView.onPause()
+        }
 
         pendingUrl = youtubeUrlFrom(intent) ?: Net.HOME_URL
         worker.execute {
@@ -75,18 +81,30 @@ class MainActivity : Activity() {
         if (engineReady) webView.loadUrl(url) else pendingUrl = url
     }
 
-    // Si hay algo sonando, la WebView sigue activa al salir o bloquear el móvil.
+    // Con reproducción activa, la WebView sigue funcionando al salir o bloquear el móvil.
+    override fun onPause() {
+        super.onPause()
+        // En pantalla completa el vídeo vive en otra vista de Chromium que sí se
+        // daría por oculta; se sale de ella antes de que se oculte la ventana.
+        if (PlaybackService.running && fullscreenView != null) {
+            (webView.webChromeClient as WebChromeClient).onHideCustomView()
+        }
+    }
+
     override fun onStop() {
         super.onStop()
-        if (!PlaybackService.Player.state.playing) webView.onPause()
+        stopped = true
+        if (!PlaybackService.running) webView.onPause()
     }
 
     override fun onStart() {
         super.onStart()
+        stopped = false
         webView.onResume()
     }
 
     override fun onDestroy() {
+        PlaybackService.onStopped = null
         PlaybackService.stopPlayback(this)
         worker.shutdown()
         webView.destroy()

@@ -22,7 +22,8 @@ App Android que abre YouTube (`m.youtube.com`) a pantalla completa con **el moto
 - `assets/background.js` (inyectado al inicio de cada página de YouTube) le dice a YouTube que la página sigue visible: bloquea `visibilitychange`/`pagehide` y fija `document.hidden = false`, que es lo que usa para pausar.
 - El mismo script avisa a la app de qué suena (título, posición, duración) y recibe las órdenes de los controles.
 - `PlaybackService` es un servicio en primer plano de tipo `mediaPlayback`: notificación con controles, `MediaSession` para la pantalla de bloqueo y bluetooth, y wake lock + WiFi lock mientras suena.
-- Al salir de la app no se pausa la WebView si hay algo sonando, y el renderizador mantiene prioridad alta.
+- Chromium, dentro de la WebView, marca la página como oculta cuando la ventana deja de verse, y en Android pausa los vídeos de páginas ocultas. `KeepAliveWebView` no le informa de que la ventana se ha ocultado mientras la reproducción en segundo plano está activa, y la WebView tampoco se pausa. El renderizador mantiene prioridad alta.
+- Si bloqueas el móvil en pantalla completa, la app sale de pantalla completa para que el audio siga.
 - En Android 13+ la app pide permiso de notificaciones; sin él el audio sigue, pero la notificación no se ve. Si el móvil corta el audio tras un rato, quita a ShieldTube de la optimización de batería (*Ajustes → Apps → ShieldTube → Batería → Sin restricciones*).
 - Para pararlo del todo: botón ✕ de la notificación o cerrar la app desde recientes.
 

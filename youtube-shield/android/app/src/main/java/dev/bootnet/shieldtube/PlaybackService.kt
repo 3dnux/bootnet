@@ -150,6 +150,7 @@ class PlaybackService : Service() {
         wifiLock?.release()
         session.release()
         running = false
+        onStopped?.invoke()
         super.onDestroy()
     }
 
@@ -210,6 +211,9 @@ class PlaybackService : Service() {
 
         @Volatile
         var running = false
+
+        /** Se llama (en el hilo principal) cuando el servicio termina. */
+        var onStopped: (() -> Unit)? = null
 
         fun stopPlayback(context: Context) {
             Player.send("pause")

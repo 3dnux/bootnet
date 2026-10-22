@@ -1,0 +1,26 @@
+[package]
+name = "shieldtube"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Motor de Brave Shields. Sin "single-thread" para que el Engine sea Send + Sync:
+# WebView consulta las peticiones desde varios hilos.
+adblock = { version = "=0.13.3", default-features = false, features = [
+    "embedded-domain-resolver",
+    "full-regex-handling",
+    "css-validation",
+] }
+jni = { version = "0.21.1", default-features = false }
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

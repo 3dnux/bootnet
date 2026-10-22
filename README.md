@@ -279,4 +279,4 @@ Notas:
 
 ## Otros proyectos en este repositorio
 
-- [`youtube-shield/`](youtube-shield/README.md): app de escritorio que abre YouTube con el motor de bloqueo de anuncios de Brave (adblock-rust) y sus listas de Shields.
+- [`youtube-shield/`](youtube-shield/README.md): app de escritorio y Android (APK) que abre YouTube con el motor de bloqueo de anuncios de Brave (adblock-rust) y sus listas de Shields.

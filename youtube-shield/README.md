@@ -1,6 +1,6 @@
 # ShieldTube — YouTube con el bloqueador de anuncios de Brave
 
-App de escritorio (Windows, macOS, Linux) que abre YouTube en su propia ventana, como una PWA instalada, pero con **el mismo motor de bloqueo que Brave Shields**:
+App de escritorio (Windows, macOS, Linux) y **Android** ([`android/`](android/README.md)) que abre YouTube en su propia ventana, como una PWA instalada, pero con **el mismo motor de bloqueo que Brave Shields**:
 
 - **Motor:** [`adblock-rust`](https://github.com/brave/adblock-rust) (`adblock-rs` en npm), el motor que Brave usa por dentro.
 - **Listas:** las que Brave activa por defecto, leídas de su [`list_catalog.json`](https://github.com/brave/adblock-resources/blob/master/filter_lists/list_catalog.json): EasyList, EasyPrivacy, filtros de uBlock Origin (incluido *quick-fixes*, que es donde están los arreglos para YouTube), listas propias de Brave, avisos de cookies y más. Se descargan al arrancar y se guardan en caché 24 h.

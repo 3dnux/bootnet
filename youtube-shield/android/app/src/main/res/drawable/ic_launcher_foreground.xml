@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Escudo con botón de play, en la zona segura del icono adaptativo (108x108). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FB542B"
+        android:pathData="M30.6,28.7 L77.4,28.7 L77.4,59.2 L54,80.3 L30.6,59.2 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M47.4,43.9 L63.8,54.5 L47.4,65 Z" />
+</vector>

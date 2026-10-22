@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ShieldTube</string>
+    <string name="loading">Cargando las listas de bloqueo de Brave…</string>
+    <string name="loading_hint">La primera vez tarda unos segundos; después se usan desde caché.</string>
+</resources>

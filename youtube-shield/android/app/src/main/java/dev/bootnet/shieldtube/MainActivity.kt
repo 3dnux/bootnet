@@ -54,6 +54,10 @@ class MainActivity : Activity() {
     private var stopped = false
     private lateinit var spatialButton: TextView
     private var spatialLevelScript: ScriptHandler? = null
+    private lateinit var headTracker: HeadTracker
+    private var onWatchPage = false
+    private var resumed = false
+    private var lastYawSent = 0.0
 
     /** URL de la página actual: origen de las peticiones que se consultan al motor. */
     @Volatile
@@ -84,6 +88,7 @@ class MainActivity : Activity() {
             if (stopped) webView.onPause()
         }
         SpatialAudio.listener = { level -> applySpatial(level) }
+        headTracker = HeadTracker(this) { yaw -> sendHeadYaw(yaw) }
 
         pendingUrl = youtubeUrlFrom(intent) ?: Net.HOME_URL
         worker.execute {
@@ -99,8 +104,16 @@ class MainActivity : Activity() {
     }
 
     // Con reproducción activa, la WebView sigue funcionando al salir o bloquear el móvil.
+    override fun onResume() {
+        super.onResume()
+        resumed = true
+        updateHeadTracking()
+    }
+
     override fun onPause() {
         super.onPause()
+        resumed = false
+        updateHeadTracking()
         // En pantalla completa el vídeo vive en otra vista de Chromium que sí se
         // daría por oculta; se sale de ella antes de que se oculte la ventana.
         if (PlaybackService.running && fullscreenView != null) {
@@ -123,6 +136,7 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         PlaybackService.onStopped = null
         SpatialAudio.listener = null
+        headTracker.stop()
         PlaybackService.stopPlayback(this)
         worker.shutdown()
         webView.destroy()
@@ -229,7 +243,67 @@ class MainActivity : Activity() {
         setSpatialLevelScript(level)
         webView.evaluateJavascript("window.shieldtubeSetSpatial && shieldtubeSetSpatial($level)", null)
         styleSpatialButton(level)
+        updateHeadTracking()
         Toast.makeText(this, SpatialAudio.label(this, level), Toast.LENGTH_SHORT).show()
+    }
+
+    // --- Seguimiento de cabeza ---------------------------------------------
+
+    /** Mantener pulsado el botón 3D: activa o desactiva el seguimiento de cabeza. */
+    private fun toggleHeadTracking() {
+        val enable = !SpatialAudio.headTracking(this)
+        SpatialAudio.setHeadTracking(this, enable)
+        if (enable && SpatialAudio.level(this) == 0) {
+            SpatialAudio.setLevel(this, 2) // el seguimiento necesita el 3D encendido
+        }
+        val usesSensor = enable && headTracker.headSensor() != null
+        if (enable && !usesSensor && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.CAMERA), CAMERA_REQUEST)
+        }
+        val message = when {
+            !enable -> R.string.head_off
+            usesSensor -> R.string.head_on_sensor
+            else -> R.string.head_on_camera
+        }
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+        styleSpatialButton(SpatialAudio.level(this))
+        updateHeadTracking()
+    }
+
+    /**
+     * Enciende la fuente adecuada: el sensor de los audífonos si Android lo deja
+     * usar (también en segundo plano) o, si no, la cámara frontal mientras se ve
+     * un vídeo con la app en pantalla.
+     */
+    private fun updateHeadTracking() {
+        if (!::headTracker.isInitialized) return
+        val wanted = SpatialAudio.headTracking(this) && SpatialAudio.level(this) > 0
+        if (wanted && headTracker.startSensor()) {
+            headTracker.stopCamera()
+            return
+        }
+        if (!wanted) headTracker.stopSensor()
+        val cameraAllowed = checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        if (wanted && resumed && onWatchPage && cameraAllowed) headTracker.startCamera() else headTracker.stopCamera()
+    }
+
+    private fun sendHeadYaw(yaw: Double) {
+        if (kotlin.math.abs(yaw - lastYawSent) < 0.5 && yaw != 0.0) return
+        lastYawSent = yaw
+        webView.evaluateJavascript(
+            "window.shieldtubeSetHeadYaw && shieldtubeSetHeadYaw(${"%.1f".format(java.util.Locale.ROOT, yaw)})", null,
+        )
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != CAMERA_REQUEST) return
+        if (grantResults.firstOrNull() != PackageManager.PERMISSION_GRANTED) {
+            SpatialAudio.setHeadTracking(this, false)
+            styleSpatialButton(SpatialAudio.level(this))
+            Toast.makeText(this, R.string.head_no_camera, Toast.LENGTH_LONG).show()
+        }
+        updateHeadTracking()
     }
 
     /** Botón "3D" sobre la página de un vídeo: cambia la intensidad del Sonido 3D. */
@@ -241,15 +315,21 @@ class MainActivity : Activity() {
         visibility = View.GONE
         contentDescription = SpatialAudio.label(this@MainActivity, SpatialAudio.level(this@MainActivity))
         setOnClickListener { SpatialAudio.cycle(this@MainActivity) }
+        setOnLongClickListener {
+            toggleHeadTracking()
+            true
+        }
     }.also { styleSpatialButton(SpatialAudio.level(this), it) }
 
+    /** Apagado: gris. 3D: borde naranja. 3D + seguimiento de cabeza: relleno naranja. */
     private fun styleSpatialButton(level: Int, button: TextView = spatialButton) {
         val active = level > 0
+        val tracking = active && SpatialAudio.headTracking(this)
         val accent = getColor(R.color.accent)
-        button.setTextColor(if (active) accent else Color.LTGRAY)
+        button.setTextColor(if (tracking) Color.WHITE else if (active) accent else Color.LTGRAY)
         button.background = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
-            setColor(Color.argb(200, 15, 15, 15))
+            setColor(if (tracking) accent else Color.argb(200, 15, 15, 15))
             setStroke(dp(2), if (active) accent else Color.GRAY)
         }
         button.contentDescription = SpatialAudio.label(this, level)
@@ -257,7 +337,9 @@ class MainActivity : Activity() {
 
     private fun updateSpatialButton(url: String) {
         val path = runCatching { Uri.parse(url).path }.getOrNull().orEmpty()
-        spatialButton.visibility = if (path.startsWith("/watch")) View.VISIBLE else View.GONE
+        onWatchPage = path.startsWith("/watch")
+        spatialButton.visibility = if (onWatchPage) View.VISIBLE else View.GONE
+        updateHeadTracking()
     }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
@@ -461,6 +543,7 @@ class MainActivity : Activity() {
         FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
 
     private companion object {
+        const val CAMERA_REQUEST = 2
         val BACKGROUND = Color.rgb(15, 15, 15)
     }
 }

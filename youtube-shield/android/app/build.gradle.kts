@@ -19,8 +19,8 @@ android {
         applicationId = "dev.bootnet.shieldtube"
         minSdk = 26
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.4.0"
+        versionCode = 6
+        versionName = "0.5.0"
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
         }
@@ -51,6 +51,13 @@ kotlin {
 
 dependencies {
     implementation("androidx.webkit:webkit:1.14.0")
+    // Seguimiento de cabeza con la cámara frontal (detección facial en el móvil).
+    // ML Kit vía Google Play Services: el modelo lo descarga Play Services y el
+    // APK no crece ~30 MB como con el modelo incluido.
+    implementation("androidx.camera:camera-camera2:1.5.1")
+    implementation("androidx.camera:camera-lifecycle:1.5.1")
+    implementation("androidx.lifecycle:lifecycle-runtime:2.8.7") // CameraX arrastra la 2.0.0
+    implementation("com.google.android.gms:play-services-mlkit-face-detection:17.1.0")
     testImplementation("junit:junit:4.13.2")
 }
 

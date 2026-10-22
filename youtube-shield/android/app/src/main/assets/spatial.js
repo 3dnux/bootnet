@@ -1,11 +1,13 @@
 // Sonido 3D para cualquier audífono: el audio del vídeo pasa por Web Audio y
 // se coloca como dos altavoces virtuales delante del oyente (HRTF, el mismo
 // filtrado binaural que usan los sistemas de audio espacial) más reflexiones de
-// sala desde los lados. Sin seguimiento de cabeza: eso necesita los sensores
-// del audífono, que una página no puede leer.
+// sala desde los lados.
 //
 // La app fija el nivel en window.__shieldtubeSpatial (0 = apagado, 1 suave,
 // 2 media, 3 fuerte) y lo cambia en vivo con window.shieldtubeSetSpatial(n).
+// Con seguimiento de cabeza, la app llama a window.shieldtubeSetHeadYaw(grados,
+// positivo = cabeza girada a la izquierda): se gira el oyente y los altavoces
+// virtuales se quedan quietos, como en el audio espacial de los AirPods.
 (function () {
   if (window !== window.top) return;
 
@@ -20,6 +22,7 @@
   var DISTANCE = 1.5;
   var graphs = new WeakMap();
   var active = null;
+  var headYaw = 0;
 
   function level() {
     var n = window.__shieldtubeSpatial | 0;
@@ -91,6 +94,26 @@
     return { ctx: ctx, dry: dry, wet: wet, out: out, front: front, rooms: rooms };
   }
 
+  // Gira al oyente: con la cabeza a la izquierda, el frente de la escena queda a
+  // su derecha. Transición corta (60 ms) para evitar chasquidos.
+  function orient(graph) {
+    var rad = headYaw * Math.PI / 180;
+    var listener = graph.ctx.listener;
+    var x = -Math.sin(rad);
+    var z = -Math.cos(rad);
+    if (listener.forwardX) {
+      var t = graph.ctx.currentTime;
+      listener.forwardX.setTargetAtTime(x, t, 0.06);
+      listener.forwardY.setTargetAtTime(0, t, 0.06);
+      listener.forwardZ.setTargetAtTime(z, t, 0.06);
+      listener.upX.value = 0;
+      listener.upY.value = 1;
+      listener.upZ.value = 0;
+    } else {
+      listener.setOrientation(x, 0, z, 0, 1, 0);
+    }
+  }
+
   function apply(graph) {
     var preset = PRESETS[level()];
     if (!preset) {
@@ -108,6 +131,7 @@
       room.gain.gain.value = preset.room;
       place(room.panner, room.angle);
     });
+    orient(graph);
   }
 
   // Se engancha al vídeo la primera vez que suena con el 3D activado. Después el
@@ -129,6 +153,11 @@
   document.addEventListener('play', function (event) {
     if (event.target instanceof HTMLVideoElement) attach(event.target);
   }, true);
+
+  window.shieldtubeSetHeadYaw = function (degrees) {
+    headYaw = Math.max(-90, Math.min(90, Number(degrees) || 0));
+    if (active) orient(active);
+  };
 
   window.shieldtubeSetSpatial = function (n) {
     window.__shieldtubeSpatial = n;

@@ -22,10 +22,19 @@ App Android que abre YouTube (`m.youtube.com`) a pantalla completa con **el moto
 
 `assets/spatial.js` pasa el audio del vídeo por Web Audio: cada canal del estéreo se coloca como un altavoz virtual delante del oyente (±30°, ±45° o ±60° según la intensidad) con `PannerNode` en modo HRTF, el filtrado binaural de los sistemas de audio espacial, más reflexiones de sala retrasadas que llegan desde los lados (±110°). Un limitador evita saturación, y una compensación de volumen medida por intensidad hace que activarlo no suene más fuerte (±1,5 dB).
 
-- El sonido sale "de delante" en vez de dentro de la cabeza. No hay seguimiento de cabeza: requiere los sensores del audífono, que la página no puede leer. YouTube es estéreo, así que es una simulación, no Dolby Atmos.
+- El sonido sale "de delante" en vez de dentro de la cabeza. YouTube es estéreo, así que es una simulación, no Dolby Atmos.
 - Se recuerda entre sesiones y funciona en segundo plano.
 - Solo se aplica a audio de MediaSource (`blob:`), que es lo que usa YouTube; cualquier otro audio se deja intacto para que no salga en silencio.
 - Si se combina con el ecualizador o el "360 Reality Audio" de la app de Sony, el efecto se suma. Mejor usar solo uno de los dos procesados espaciales.
+
+### Seguimiento de cabeza
+
+Mantén pulsado el botón "3D" para activarlo (el botón se rellena de naranja). Al girar la cabeza, las bocinas virtuales se quedan quietas delante de ti, como el audio espacial de los AirPods: se gira el oyente de Web Audio (`shieldtubeSetHeadYaw`). `HeadTracker` usa la mejor fuente disponible:
+
+1. **Sensor de los audífonos** (`Sensor.TYPE_HEAD_TRACKER`, p. ej. Sony WH-1000XM5 con su firmware de seguimiento de cabeza). Android lo reserva al sistema; para que la app pueda leerlo hay que ejecutar, desde una computadora con depuración USB (o depuración inalámbrica), `adb shell cmd sensorservice unrestrict-ht`. Dura hasta reiniciar el móvil. Además, el móvil debe soportar el protocolo de head tracking de Android 13+, que algunos fabricantes no activan. Funciona también con la pantalla apagada, y el frente se recentra despacio si cambias de postura.
+2. **Cámara frontal** con detección facial de ML Kit (a través de Google Play Services), procesada en el propio móvil: las imágenes no se guardan ni se envían. Solo funciona con la app en pantalla y en la página de un vídeo, y mientras miras la pantalla. El frente es la pantalla. Android muestra el indicador verde de cámara mientras está activa. Si no detecta tu cara, el sonido vuelve al frente.
+
+La matemática (vector de Euler → yaw, recentrado, suavizado) está en `HeadMath.kt` con tests; la dirección se verificó en Chromium (cabeza a la izquierda → el sonido pasa al oído derecho, con el volumen total estable).
 
 ## Reproducción en segundo plano
 

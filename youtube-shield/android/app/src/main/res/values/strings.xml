@@ -3,4 +3,8 @@
     <string name="app_name">ShieldTube</string>
     <string name="loading">Cargando las listas de bloqueo de Brave…</string>
     <string name="loading_hint">La primera vez tarda unos segundos; después se usan desde caché.</string>
+    <string name="playback_channel">Reproducción</string>
+    <string name="play">Reproducir</string>
+    <string name="pause">Pausar</string>
+    <string name="stop">Cerrar</string>
 </resources>

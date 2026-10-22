@@ -14,7 +14,17 @@ App Android que abre YouTube (`m.youtube.com`) a pantalla completa con **el moto
 - Listas: las que Brave activa por defecto **en Android** según su `list_catalog.json`. Se descargan la primera vez y se refrescan cada 24 h; el motor compilado se guarda en caché para arrancar rápido.
 - Los enlaces de YouTube pueden abrirse con ShieldTube (aparece en el selector de apps).
 - Pantalla completa con giro automático y botón atrás para volver.
+- **Reproducción en segundo plano:** el vídeo sigue sonando al salir de la app o bloquear el móvil, con notificación y controles en la pantalla de bloqueo y en los auriculares (reproducir/pausar/avanzar).
 - Los enlaces externos se abren en el navegador; los `intent://` a la app oficial se ignoran.
+
+## Reproducción en segundo plano
+
+- `assets/background.js` (inyectado al inicio de cada página de YouTube) le dice a YouTube que la página sigue visible: bloquea `visibilitychange`/`pagehide` y fija `document.hidden = false`, que es lo que usa para pausar.
+- El mismo script avisa a la app de qué suena (título, posición, duración) y recibe las órdenes de los controles.
+- `PlaybackService` es un servicio en primer plano de tipo `mediaPlayback`: notificación con controles, `MediaSession` para la pantalla de bloqueo y bluetooth, y wake lock + WiFi lock mientras suena.
+- Al salir de la app no se pausa la WebView si hay algo sonando, y el renderizador mantiene prioridad alta.
+- En Android 13+ la app pide permiso de notificaciones; sin él el audio sigue, pero la notificación no se ve. Si el móvil corta el audio tras un rato, quita a ShieldTube de la optimización de batería (*Ajustes → Apps → ShieldTube → Batería → Sin restricciones*).
+- Para pararlo del todo: botón ✕ de la notificación o cerrar la app desde recientes.
 
 ## Instalar el APK
 
@@ -51,5 +61,4 @@ cargo test --release --manifest-path rust/Cargo.toml  # puente JNI y motor
 
 - WebView no indica el tipo de cada petición (Brave sí lo sabe porque va dentro de Chromium); se deduce de la cabecera `Accept` y la extensión, así que algún filtro que dependa del tipo puede no aplicarse.
 - Hace falta un WebView reciente (Android System WebView / Chrome actualizados) para inyectar scriptlets al inicio del documento. Sin eso solo funciona el bloqueo de red.
-- No hay reproducción en segundo plano ni con la pantalla apagada.
 - Google puede rechazar el inicio de sesión dentro de WebViews. YouTube funciona sin cuenta.

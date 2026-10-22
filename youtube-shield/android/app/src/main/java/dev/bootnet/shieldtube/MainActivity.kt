@@ -1,10 +1,12 @@
 package dev.bootnet.shieldtube
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
 import android.os.Build
@@ -58,6 +60,7 @@ class MainActivity : Activity() {
         applySystemBarInsets()
         setupWebView()
         registerBack()
+        requestNotificationPermission()
 
         pendingUrl = youtubeUrlFrom(intent) ?: Net.HOME_URL
         worker.execute {
@@ -72,17 +75,19 @@ class MainActivity : Activity() {
         if (engineReady) webView.loadUrl(url) else pendingUrl = url
     }
 
-    override fun onPause() {
-        super.onPause()
-        webView.onPause()
+    // Si hay algo sonando, la WebView sigue activa al salir o bloquear el móvil.
+    override fun onStop() {
+        super.onStop()
+        if (!PlaybackService.Player.state.playing) webView.onPause()
     }
 
-    override fun onResume() {
-        super.onResume()
+    override fun onStart() {
+        super.onStart()
         webView.onResume()
     }
 
     override fun onDestroy() {
+        PlaybackService.stopPlayback(this)
         worker.shutdown()
         webView.destroy()
         super.onDestroy()
@@ -101,6 +106,9 @@ class MainActivity : Activity() {
             userAgentString = userAgentString.replace("; wv", "").replace(Regex("Version/\\S+ "), "")
         }
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
+        // Que Android no rebaje la prioridad del renderizador cuando la app no se ve.
+        webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
+        installBackgroundPlayback()
         webView.webViewClient = ShieldClient()
         webView.webChromeClient = FullscreenClient()
         if (WebViewFeature.isFeatureSupported(WebViewFeature.SERVICE_WORKER_BASIC_USAGE) &&
@@ -109,6 +117,27 @@ class MainActivity : Activity() {
             ServiceWorkerControllerCompat.getInstance().setServiceWorkerClient(object : ServiceWorkerClientCompat() {
                 override fun shouldInterceptRequest(request: WebResourceRequest) = intercept(request)
             })
+        }
+    }
+
+    /** background.js: evita que YouTube se pause en segundo plano y controla el servicio. */
+    private fun installBackgroundPlayback() {
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) return
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) return
+        val origins = Net.YOUTUBE_ORIGINS.toSet()
+        WebViewCompat.addWebMessageListener(webView, "shieldtubeMedia", origins) { _, message, _, isMainFrame, reply ->
+            val data = message.data
+            if (isMainFrame && data != null) PlaybackService.Player.onPageState(applicationContext, data, reply)
+        }
+        val script = assets.open("background.js").bufferedReader().use { it.readText() }
+        WebViewCompat.addDocumentStartJavaScript(webView, script, origins)
+    }
+
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
     }
 

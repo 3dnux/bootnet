@@ -16,6 +16,16 @@ App Android que abre YouTube (`m.youtube.com`) a pantalla completa con **el moto
 - Pantalla completa con giro automático y botón atrás para volver.
 - **Reproducción en segundo plano:** el vídeo sigue sonando al salir de la app o bloquear el móvil, con notificación y controles en la pantalla de bloqueo y en los auriculares (reproducir/pausar/avanzar).
 - Los enlaces externos se abren en el navegador; los `intent://` a la app oficial se ignoran.
+- **Sonido 3D** para cualquier audífono: botón "3D" en la página del vídeo y en la notificación (apagado → suave → media → fuerte).
+
+## Sonido 3D
+
+`assets/spatial.js` pasa el audio del vídeo por Web Audio: cada canal del estéreo se coloca como un altavoz virtual delante del oyente (±30°, ±45° o ±60° según la intensidad) con `PannerNode` en modo HRTF, el filtrado binaural de los sistemas de audio espacial, más reflexiones de sala retrasadas que llegan desde los lados (±110°). Un limitador evita saturación, y una compensación de volumen medida por intensidad hace que activarlo no suene más fuerte (±1,5 dB).
+
+- El sonido sale "de delante" en vez de dentro de la cabeza. No hay seguimiento de cabeza: requiere los sensores del audífono, que la página no puede leer. YouTube es estéreo, así que es una simulación, no Dolby Atmos.
+- Se recuerda entre sesiones y funciona en segundo plano.
+- Solo se aplica a audio de MediaSource (`blob:`), que es lo que usa YouTube; cualquier otro audio se deja intacto para que no salga en silencio.
+- Si se combina con el ecualizador o el "360 Reality Audio" de la app de Sony, el efecto se suma. Mejor usar solo uno de los dos procesados espaciales.
 
 ## Reproducción en segundo plano
 

@@ -8,4 +8,10 @@
     <string name="pause">Pausar</string>
     <string name="stop">Cerrar</string>
     <string name="sign_in_retry">Google rechazó el inicio de sesión. Reintentando en modo compatible…</string>
+    <string name="spatial_button">3D</string>
+    <string name="spatial_label">Sonido 3D: %1$s</string>
+    <string name="spatial_off">apagado</string>
+    <string name="spatial_soft">suave</string>
+    <string name="spatial_medium">media</string>
+    <string name="spatial_strong">fuerte</string>
 </resources>

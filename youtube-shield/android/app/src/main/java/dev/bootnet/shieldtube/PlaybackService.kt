@@ -61,6 +61,7 @@ class PlaybackService : Service() {
         when (intent?.action) {
             ACTION_PLAY -> Player.send("play")
             ACTION_PAUSE -> Player.send("pause")
+            ACTION_SPATIAL -> SpatialAudio.cycle(this)
             ACTION_STOP -> {
                 Player.send("pause")
                 stopSelf()
@@ -118,6 +119,11 @@ class PlaybackService : Service() {
                 Icon.createWithResource(this, R.drawable.ic_play), getString(R.string.play), serviceIntent(ACTION_PLAY),
             ).build()
         }
+        val spatial = Notification.Action.Builder(
+            Icon.createWithResource(this, R.drawable.ic_spatial),
+            SpatialAudio.label(this, SpatialAudio.level(this)),
+            serviceIntent(ACTION_SPATIAL),
+        ).build()
         val stop = Notification.Action.Builder(
             Icon.createWithResource(this, R.drawable.ic_close), getString(R.string.stop), serviceIntent(ACTION_STOP),
         ).build()
@@ -130,8 +136,9 @@ class PlaybackService : Service() {
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .setOngoing(state.playing)
             .addAction(toggle)
+            .addAction(spatial)
             .addAction(stop)
-            .setStyle(Notification.MediaStyle().setMediaSession(session.sessionToken).setShowActionsInCompactView(0, 1))
+            .setStyle(Notification.MediaStyle().setMediaSession(session.sessionToken).setShowActionsInCompactView(0, 1, 2))
             .build()
     }
 
@@ -207,6 +214,7 @@ class PlaybackService : Service() {
         private const val ACTION_PLAY = "dev.bootnet.shieldtube.PLAY"
         private const val ACTION_PAUSE = "dev.bootnet.shieldtube.PAUSE"
         private const val ACTION_STOP = "dev.bootnet.shieldtube.STOP"
+        private const val ACTION_SPATIAL = "dev.bootnet.shieldtube.SPATIAL"
         private const val MAX_WAKE_MS = 4 * 60 * 60 * 1000L
 
         @Volatile

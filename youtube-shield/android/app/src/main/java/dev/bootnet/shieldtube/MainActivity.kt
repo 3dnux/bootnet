@@ -8,6 +8,8 @@ import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -29,6 +31,7 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import android.window.OnBackInvokedDispatcher
+import androidx.webkit.ScriptHandler
 import androidx.webkit.ServiceWorkerClientCompat
 import androidx.webkit.ServiceWorkerControllerCompat
 import androidx.webkit.UserAgentMetadata
@@ -49,6 +52,8 @@ class MainActivity : Activity() {
     private var engineReady = false
     private var pendingUrl: String? = null
     private var stopped = false
+    private lateinit var spatialButton: TextView
+    private var spatialLevelScript: ScriptHandler? = null
 
     /** URL de la página actual: origen de las peticiones que se consultan al motor. */
     @Volatile
@@ -61,6 +66,13 @@ class MainActivity : Activity() {
         loading = loadingView()
         root.addView(webView, matchParent())
         root.addView(loading, matchParent())
+        spatialButton = spatialButton()
+        root.addView(
+            spatialButton,
+            FrameLayout.LayoutParams(dp(44), dp(44), Gravity.BOTTOM or Gravity.END).apply {
+                setMargins(0, 0, dp(12), dp(16))
+            },
+        )
         setContentView(root)
         applySystemBarInsets()
         setupWebView()
@@ -71,6 +83,7 @@ class MainActivity : Activity() {
             webView.syncWindowVisibility()
             if (stopped) webView.onPause()
         }
+        SpatialAudio.listener = { level -> applySpatial(level) }
 
         pendingUrl = youtubeUrlFrom(intent) ?: Net.HOME_URL
         worker.execute {
@@ -109,6 +122,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         PlaybackService.onStopped = null
+        SpatialAudio.listener = null
         PlaybackService.stopPlayback(this)
         worker.shutdown()
         webView.destroy()
@@ -196,7 +210,57 @@ class MainActivity : Activity() {
         }
         val script = assets.open("background.js").bufferedReader().use { it.readText() }
         WebViewCompat.addDocumentStartJavaScript(webView, script, origins)
+        val spatial = assets.open("spatial.js").bufferedReader().use { it.readText() }
+        WebViewCompat.addDocumentStartJavaScript(webView, spatial, origins)
+        setSpatialLevelScript(SpatialAudio.level(this))
     }
+
+    /** Nivel de Sonido 3D con el que arrancan las páginas nuevas. */
+    private fun setSpatialLevelScript(level: Int) {
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) return
+        spatialLevelScript?.remove()
+        spatialLevelScript = WebViewCompat.addDocumentStartJavaScript(
+            webView, "window.__shieldtubeSpatial = $level;", Net.YOUTUBE_ORIGINS.toSet(),
+        )
+    }
+
+    /** Aplica el nivel de Sonido 3D a la página actual y a las siguientes. */
+    private fun applySpatial(level: Int) {
+        setSpatialLevelScript(level)
+        webView.evaluateJavascript("window.shieldtubeSetSpatial && shieldtubeSetSpatial($level)", null)
+        styleSpatialButton(level)
+        Toast.makeText(this, SpatialAudio.label(this, level), Toast.LENGTH_SHORT).show()
+    }
+
+    /** Botón "3D" sobre la página de un vídeo: cambia la intensidad del Sonido 3D. */
+    private fun spatialButton(): TextView = TextView(this).apply {
+        text = getString(R.string.spatial_button)
+        textSize = 13f
+        typeface = Typeface.DEFAULT_BOLD
+        gravity = Gravity.CENTER
+        visibility = View.GONE
+        contentDescription = SpatialAudio.label(this@MainActivity, SpatialAudio.level(this@MainActivity))
+        setOnClickListener { SpatialAudio.cycle(this@MainActivity) }
+    }.also { styleSpatialButton(SpatialAudio.level(this), it) }
+
+    private fun styleSpatialButton(level: Int, button: TextView = spatialButton) {
+        val active = level > 0
+        val accent = getColor(R.color.accent)
+        button.setTextColor(if (active) accent else Color.LTGRAY)
+        button.background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(Color.argb(200, 15, 15, 15))
+            setStroke(dp(2), if (active) accent else Color.GRAY)
+        }
+        button.contentDescription = SpatialAudio.label(this, level)
+    }
+
+    private fun updateSpatialButton(url: String) {
+        val path = runCatching { Uri.parse(url).path }.getOrNull().orEmpty()
+        spatialButton.visibility = if (path.startsWith("/watch")) View.VISIBLE else View.GONE
+    }
+
+    private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     private fun requestNotificationPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
@@ -282,6 +346,7 @@ class MainActivity : Activity() {
 
         override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
             pageUrl = url
+            updateSpatialButton(url)
         }
     }
 

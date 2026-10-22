@@ -276,3 +276,7 @@ Notas:
 - La imagen base es `python:3.11-slim` y se instalan certificados TLS para poder consultar la API de CoinGecko vía HTTPS.
 - No hay dependencias externas (no se requiere `requirements.txt`).
 - Para actualizar a la última versión del código, vuelva a ejecutar el comando de build.
+
+## Otros proyectos en este repositorio
+
+- [`youtube-shield/`](youtube-shield/README.md): app de escritorio que abre YouTube con el motor de bloqueo de anuncios de Brave (adblock-rust) y sus listas de Shields.

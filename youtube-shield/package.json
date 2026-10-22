@@ -1,0 +1,44 @@
+{
+  "name": "youtube-shield",
+  "version": "0.1.0",
+  "description": "App de escritorio que abre YouTube con el motor de bloqueo de anuncios de Brave (adblock-rust) y las listas de Brave Shields.",
+  "main": "src/main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "postinstall": "node scripts/build-resources.mjs",
+    "update-resources": "node scripts/build-resources.mjs --force",
+    "test": "node --test",
+    "dist": "electron-builder"
+  },
+  "dependencies": {
+    "adblock-rs": "0.13.3"
+  },
+  "devDependencies": {
+    "electron": "44.5.1",
+    "electron-builder": "26.16.1"
+  },
+  "build": {
+    "appId": "dev.bootnet.shieldtube",
+    "productName": "ShieldTube",
+    "files": [
+      "src/**/*",
+      "data/resources.json",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/adblock-rs/js/index.node"
+    ],
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "category": "Video"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.video"
+    }
+  }
+}

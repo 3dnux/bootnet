@@ -53,6 +53,8 @@ class MainActivity : Activity() {
     private var pendingUrl: String? = null
     private var stopped = false
     private lateinit var spatialButton: TextView
+    private lateinit var headStatus: TextView
+    private var videoPlaying = false
     private var spatialLevelScript: ScriptHandler? = null
     private lateinit var headTracker: HeadTracker
     private var onWatchPage = false
@@ -77,6 +79,13 @@ class MainActivity : Activity() {
                 setMargins(0, 0, dp(12), dp(16))
             },
         )
+        headStatus = headStatusView()
+        root.addView(
+            headStatus,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.END,
+            ).apply { setMargins(0, 0, dp(64), dp(24)) },
+        )
         setContentView(root)
         applySystemBarInsets()
         setupWebView()
@@ -88,7 +97,7 @@ class MainActivity : Activity() {
             if (stopped) webView.onPause()
         }
         SpatialAudio.listener = { level -> applySpatial(level) }
-        headTracker = HeadTracker(this) { yaw -> sendHeadYaw(yaw) }
+        headTracker = HeadTracker(this, onYaw = ::sendHeadYaw, onStatus = { headStatus.text = it })
 
         pendingUrl = youtubeUrlFrom(intent) ?: Net.HOME_URL
         worker.execute {
@@ -220,7 +229,14 @@ class MainActivity : Activity() {
         val origins = Net.YOUTUBE_ORIGINS.toSet()
         WebViewCompat.addWebMessageListener(webView, "shieldtubeMedia", origins) { _, message, _, isMainFrame, reply ->
             val data = message.data
-            if (isMainFrame && data != null) PlaybackService.Player.onPageState(applicationContext, data, reply)
+            if (isMainFrame && data != null) {
+                PlaybackService.Player.onPageState(applicationContext, data, reply)
+                // También en Shorts o el minirreproductor, donde la URL no es /watch.
+                if (runCatching { JSONObject(data).optBoolean("playing") }.getOrDefault(false) && !videoPlaying) {
+                    videoPlaying = true
+                    updateSpatialControls()
+                }
+            }
         }
         val script = assets.open("background.js").bufferedReader().use { it.readText() }
         WebViewCompat.addDocumentStartJavaScript(webView, script, origins)
@@ -243,8 +259,9 @@ class MainActivity : Activity() {
         setSpatialLevelScript(level)
         webView.evaluateJavascript("window.shieldtubeSetSpatial && shieldtubeSetSpatial($level)", null)
         styleSpatialButton(level)
-        updateHeadTracking()
-        Toast.makeText(this, SpatialAudio.label(this, level), Toast.LENGTH_SHORT).show()
+        updateSpatialControls()
+        val hint = if (level > 0 && !SpatialAudio.headTracking(this)) "\n" + getString(R.string.head_hint) else ""
+        Toast.makeText(this, SpatialAudio.label(this, level) + hint, Toast.LENGTH_LONG).show()
     }
 
     // --- Seguimiento de cabeza ---------------------------------------------
@@ -267,7 +284,7 @@ class MainActivity : Activity() {
         }
         Toast.makeText(this, message, Toast.LENGTH_LONG).show()
         styleSpatialButton(SpatialAudio.level(this))
-        updateHeadTracking()
+        updateSpatialControls()
     }
 
     /**
@@ -284,7 +301,12 @@ class MainActivity : Activity() {
         }
         if (!wanted) headTracker.stopSensor()
         val cameraAllowed = checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-        if (wanted && resumed && onWatchPage && cameraAllowed) headTracker.startCamera() else headTracker.stopCamera()
+        if (wanted && resumed && controlsVisible() && cameraAllowed) {
+            headTracker.startCamera()
+        } else {
+            headTracker.stopCamera()
+            headStatus.text = getString(if (wanted && !cameraAllowed) R.string.head_no_camera else R.string.head_status_paused)
+        }
     }
 
     private fun sendHeadYaw(yaw: Double) {
@@ -303,7 +325,7 @@ class MainActivity : Activity() {
             styleSpatialButton(SpatialAudio.level(this))
             Toast.makeText(this, R.string.head_no_camera, Toast.LENGTH_LONG).show()
         }
-        updateHeadTracking()
+        updateSpatialControls()
     }
 
     /** Botón "3D" sobre la página de un vídeo: cambia la intensidad del Sonido 3D. */
@@ -338,8 +360,30 @@ class MainActivity : Activity() {
     private fun updateSpatialButton(url: String) {
         val path = runCatching { Uri.parse(url).path }.getOrNull().orEmpty()
         onWatchPage = path.startsWith("/watch")
-        spatialButton.visibility = if (onWatchPage) View.VISIBLE else View.GONE
+        updateSpatialControls()
+    }
+
+    /** El botón 3D se ve en la página de un vídeo o mientras suena alguno. */
+    private fun controlsVisible() = onWatchPage || videoPlaying
+
+    private fun updateSpatialControls() {
+        val visible = controlsVisible()
+        spatialButton.visibility = if (visible) View.VISIBLE else View.GONE
+        val tracking = SpatialAudio.headTracking(this) && SpatialAudio.level(this) > 0
+        headStatus.visibility = if (visible && tracking) View.VISIBLE else View.GONE
         updateHeadTracking()
+    }
+
+    /** Estado del seguimiento de cabeza junto al botón 3D ("Cara 12°", "Buscando tu cara…"). */
+    private fun headStatusView(): TextView = TextView(this).apply {
+        textSize = 12f
+        setTextColor(Color.WHITE)
+        setPadding(dp(10), dp(5), dp(10), dp(5))
+        visibility = View.GONE
+        background = GradientDrawable().apply {
+            cornerRadius = dp(14).toFloat()
+            setColor(Color.argb(210, 15, 15, 15))
+        }
     }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
@@ -423,6 +467,7 @@ class MainActivity : Activity() {
 
         override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
             pageUrl = url
+            videoPlaying = false
             if (Net.isSignInRejected(url)) view.post { onSignInRejected() }
         }
 

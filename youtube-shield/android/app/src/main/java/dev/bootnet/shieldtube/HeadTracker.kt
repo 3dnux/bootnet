@@ -19,6 +19,11 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
+import com.google.android.gms.common.moduleinstall.InstallStatusListener
+import com.google.android.gms.common.moduleinstall.ModuleInstall
+import com.google.android.gms.common.moduleinstall.ModuleInstallRequest
+import com.google.android.gms.common.moduleinstall.ModuleInstallStatusUpdate
+import com.google.android.gms.common.moduleinstall.ModuleInstallStatusUpdate.InstallState
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions
@@ -34,12 +39,14 @@ import java.util.concurrent.Executors
  * - Cámara frontal + detección facial de ML Kit, en el propio móvil (las
  *   imágenes no se guardan ni se envían). Solo mientras se mira la pantalla.
  *
- * Entrega el yaw (grados, positivo = izquierda) en el hilo principal; todo el
- * cálculo ocurre también en el hilo principal.
+ * Entrega el yaw (grados, positivo = izquierda) y un texto de estado para la
+ * pantalla, ambos en el hilo principal (donde ocurre también todo el cálculo).
  */
-class HeadTracker(private val context: Context, private val onYaw: (Double) -> Unit) {
-    enum class Source { SENSOR, CAMERA }
-
+class HeadTracker(
+    private val context: Context,
+    private val onYaw: (Double) -> Unit,
+    private val onStatus: (String) -> Unit,
+) {
     private val main = Handler(Looper.getMainLooper())
     private val sensors = context.getSystemService(SensorManager::class.java)
     private val smoother = HeadMath.Smoother()
@@ -80,7 +87,8 @@ class HeadTracker(private val context: Context, private val onYaw: (Double) -> U
             val yaw = HeadMath.yawFromEulerVector(
                 event.values[0].toDouble(), event.values[1].toDouble(), event.values[2].toDouble(),
             )
-            emit(recenter.update(yaw, dt))
+            val smooth = emit(recenter.update(yaw, dt))
+            status(R.string.head_status_sensor, smooth.toInt())
         }
 
         override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) = Unit
@@ -137,9 +145,15 @@ class HeadTracker(private val context: Context, private val onYaw: (Double) -> U
         main.post { onYaw(0.0) }
     }
 
-    private fun emit(yaw: Double) {
+    private fun emit(yaw: Double): Double {
         val smooth = smoother.update(yaw.coerceIn(-90.0, 90.0))
         main.post { onYaw(smooth) }
+        return smooth
+    }
+
+    private fun status(resId: Int, vararg args: Any) {
+        val text = context.getString(resId, *args)
+        main.post { onStatus(text) }
     }
 
     /** Cámara frontal a baja resolución (~15 fps) + ML Kit en modo rápido. */
@@ -157,8 +171,67 @@ class HeadTracker(private val context: Context, private val onYaw: (Double) -> U
 
         override val lifecycle: Lifecycle get() = registry
 
+        /**
+         * El modelo de detección facial lo pone Google Play Services. Con el APK
+         * instalado a mano (no desde Play Store) puede no estar descargado: se pide
+         * explícitamente y se espera a que termine.
+         */
         fun start() {
             registry.currentState = Lifecycle.State.CREATED
+            status(R.string.head_status_starting)
+            val modules = ModuleInstall.getClient(context)
+            modules.areModulesAvailable(detector)
+                .addOnSuccessListener { response ->
+                    if (response.areModulesAvailable()) openCamera() else downloadModel()
+                }
+                .addOnFailureListener { error ->
+                    Log.w(TAG, "Google Play Services no responde", error)
+                    status(R.string.head_status_no_play_services)
+                }
+        }
+
+        private fun downloadModel() {
+            status(R.string.head_status_downloading, 0)
+            val modules = ModuleInstall.getClient(context)
+            val listener = object : InstallStatusListener {
+                override fun onInstallStatusUpdated(update: ModuleInstallStatusUpdate) {
+                    val progress = update.progressInfo
+                    if (progress != null && progress.totalBytesToDownload > 0) {
+                        status(
+                            R.string.head_status_downloading,
+                            (progress.bytesDownloaded * 100 / progress.totalBytesToDownload).toInt(),
+                        )
+                    }
+                    when (update.installState) {
+                        InstallState.STATE_COMPLETED -> {
+                            modules.unregisterListener(this)
+                            if (registry.currentState != Lifecycle.State.DESTROYED) openCamera()
+                        }
+                        InstallState.STATE_FAILED, InstallState.STATE_CANCELED -> {
+                            modules.unregisterListener(this)
+                            status(R.string.head_status_download_failed)
+                        }
+                        else -> Unit
+                    }
+                }
+            }
+            val request = ModuleInstallRequest.newBuilder().addApi(detector).setListener(listener, main::post).build()
+            modules.installModules(request)
+                .addOnSuccessListener { response ->
+                    if (response.areModulesAlreadyInstalled()) {
+                        modules.unregisterListener(listener)
+                        openCamera()
+                    }
+                }
+                .addOnFailureListener { error ->
+                    Log.w(TAG, "No se pudo descargar el modelo facial", error)
+                    status(R.string.head_status_download_failed)
+                }
+        }
+
+        private fun openCamera() {
+            if (registry.currentState == Lifecycle.State.DESTROYED) return
+            status(R.string.head_status_looking)
             val future = ProcessCameraProvider.getInstance(context)
             future.addListener({
                 if (registry.currentState == Lifecycle.State.DESTROYED) return@addListener
@@ -176,7 +249,10 @@ class HeadTracker(private val context: Context, private val onYaw: (Double) -> U
                 runCatching {
                     future.get().bindToLifecycle(this, CameraSelector.DEFAULT_FRONT_CAMERA, analysis)
                     registry.currentState = Lifecycle.State.RESUMED
-                }.onFailure { Log.w(TAG, "No se pudo abrir la cámara frontal", it) }
+                }.onFailure {
+                    Log.w(TAG, "No se pudo abrir la cámara frontal", it)
+                    status(R.string.head_status_camera_failed)
+                }
             }, main::post)
         }
 
@@ -194,10 +270,16 @@ class HeadTracker(private val context: Context, private val onYaw: (Double) -> U
                     val face = faces.maxByOrNull { it.boundingBox.width() }
                     if (face != null) {
                         missed = 0
-                        emit(HeadMath.yawFromCameraFace(face.headEulerAngleY))
+                        val yaw = emit(HeadMath.yawFromCameraFace(face.headEulerAngleY))
+                        status(R.string.head_status_camera, yaw.toInt())
                     } else if (++missed == 8) {
                         emit(0.0) // sin cara ~0,5 s: el sonido vuelve al frente
+                        status(R.string.head_status_looking)
                     }
+                }
+                .addOnFailureListener { error ->
+                    Log.w(TAG, "Fallo de la detección facial", error)
+                    status(R.string.head_status_detector_failed)
                 }
                 .addOnCompleteListener { proxy.close() }
         }

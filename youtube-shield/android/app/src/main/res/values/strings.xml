@@ -18,4 +18,15 @@
     <string name="head_on_camera">Seguimiento de cabeza activado con la cámara frontal (mientras miras la pantalla)</string>
     <string name="head_off">Seguimiento de cabeza desactivado</string>
     <string name="head_no_camera">Sin permiso de cámara no hay seguimiento de cabeza</string>
+    <string name="head_status_starting">Preparando cámara…</string>
+    <string name="head_status_downloading">Descargando modelo facial %1$d%%</string>
+    <string name="head_status_download_failed">No se pudo descargar el modelo facial</string>
+    <string name="head_status_no_play_services">Necesita Google Play Services</string>
+    <string name="head_status_looking">Buscando tu cara…</string>
+    <string name="head_status_camera">Cara %1$d°</string>
+    <string name="head_status_sensor">Audífonos %1$d°</string>
+    <string name="head_status_camera_failed">No se pudo abrir la cámara</string>
+    <string name="head_status_detector_failed">Error en la detección facial</string>
+    <string name="head_status_paused">Seguimiento en pausa</string>
+    <string name="head_hint">Mantén pulsado 3D para el seguimiento de cabeza</string>
 </resources>

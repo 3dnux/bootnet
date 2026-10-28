@@ -21,6 +21,7 @@ import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.webkit.CookieManager
+import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -383,7 +384,7 @@ class MainActivity : Activity() {
         }
         if (!wanted) headTracker.stopSensor()
         val cameraAllowed = checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-        if (wanted && resumed && controlsVisible() && cameraAllowed) {
+        if (wanted && resumed && controlsVisible() && cameraAllowed && !webCameraInUse) {
             headTracker.startCamera()
         } else {
             headTracker.stopCamera()
@@ -399,8 +400,55 @@ class MainActivity : Activity() {
         )
     }
 
+    // --- Cámara para páginas web (verificación de Google) --------------------
+
+    /** Petición de cámara de una página esperando el permiso de Android. */
+    private var pendingWebCamera: PermissionRequest? = null
+
+    /** Una página (Google) está usando la cámara: el seguimiento de cabeza la suelta. */
+    private var webCameraInUse = false
+
+    /**
+     * Google puede pedir la cámara para verificar la identidad al iniciar sesión.
+     * Solo se presta a accounts.google.com y solo la cámara (nunca el micrófono).
+     */
+    private fun onWebPermissionRequest(request: PermissionRequest) {
+        val wantsCamera = PermissionRequest.RESOURCE_VIDEO_CAPTURE in request.resources
+        if (!wantsCamera || !Net.mayUseCamera(request.origin.toString())) {
+            request.deny()
+            return
+        }
+        webCameraInUse = true
+        updateHeadTracking()
+        if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            request.grant(arrayOf(PermissionRequest.RESOURCE_VIDEO_CAPTURE))
+        } else {
+            pendingWebCamera?.deny()
+            pendingWebCamera = request
+            requestPermissions(arrayOf(Manifest.permission.CAMERA), WEB_CAMERA_REQUEST)
+        }
+    }
+
+    private fun releaseWebCamera() {
+        if (!webCameraInUse) return
+        webCameraInUse = false
+        updateHeadTracking()
+    }
+
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == WEB_CAMERA_REQUEST) {
+            val request = pendingWebCamera ?: return
+            pendingWebCamera = null
+            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+                request.grant(arrayOf(PermissionRequest.RESOURCE_VIDEO_CAPTURE))
+            } else {
+                request.deny()
+                releaseWebCamera()
+                Toast.makeText(this, R.string.web_camera_denied, Toast.LENGTH_LONG).show()
+            }
+            return
+        }
         if (requestCode != CAMERA_REQUEST) return
         if (grantResults.firstOrNull() != PackageManager.PERMISSION_GRANTED) {
             SpatialAudio.setHeadTracking(this, false)
@@ -550,6 +598,7 @@ class MainActivity : Activity() {
         override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
             pageUrl = url
             videoPlaying = false
+            if (!Net.mayUseCamera(url)) releaseWebCamera()
             if (Net.isSignInRejected(url)) view.post { onSignInRejected() }
         }
 
@@ -561,6 +610,13 @@ class MainActivity : Activity() {
 
     /** Pantalla completa de los vídeos. */
     private inner class FullscreenClient : WebChromeClient() {
+        override fun onPermissionRequest(request: PermissionRequest) = onWebPermissionRequest(request)
+
+        override fun onPermissionRequestCanceled(request: PermissionRequest) {
+            if (request == pendingWebCamera) pendingWebCamera = null
+            releaseWebCamera()
+        }
+
         override fun onShowCustomView(view: View, callback: CustomViewCallback) {
             if (fullscreenView != null) {
                 callback.onCustomViewHidden()
@@ -671,6 +727,7 @@ class MainActivity : Activity() {
 
     private companion object {
         const val CAMERA_REQUEST = 2
+        const val WEB_CAMERA_REQUEST = 3
         val BACKGROUND = Color.rgb(15, 15, 15)
     }
 }

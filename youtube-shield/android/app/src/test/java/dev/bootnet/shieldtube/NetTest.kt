@@ -56,6 +56,15 @@ class NetTest {
     }
 
     @Test
+    fun soloGoogleUsaLaCamara() {
+        assertTrue(Net.mayUseCamera("https://accounts.google.com/"))
+        assertTrue(Net.mayUseCamera("https://accounts.google.com"))
+        assertFalse(Net.mayUseCamera("https://m.youtube.com/"))
+        assertFalse(Net.mayUseCamera("http://accounts.google.com/"))
+        assertFalse(Net.mayUseCamera("https://accounts.google.com.evil.net/"))
+    }
+
+    @Test
     fun decodificaDataUrls() {
         val js = Net.parseDataUrl("data:application/javascript;base64,KGZ1bmN0aW9uKCl7fSkoKQ==")!!
         assertEquals("application/javascript", js.mimeType)

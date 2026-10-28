@@ -34,4 +34,5 @@
     <string name="clip_open">Ver</string>
     <string name="clip_dismiss">Ahora no</string>
     <string name="share_no_link">No hay un enlace de YouTube en lo que compartiste</string>
+    <string name="web_camera_denied">Sin permiso de cámara, Google no puede completar la verificación</string>
 </resources>

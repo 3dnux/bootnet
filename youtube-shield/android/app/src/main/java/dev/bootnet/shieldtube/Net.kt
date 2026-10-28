@@ -77,6 +77,15 @@ object Net {
         return uri.host == "accounts.google.com" && uri.path.orEmpty().contains("/signin/rejected")
     }
 
+    /**
+     * Orígenes a los que la app presta la cámara (getUserMedia): solo la
+     * verificación de identidad de Google al iniciar sesión.
+     */
+    fun mayUseCamera(origin: String): Boolean {
+        val uri = runCatching { URI(origin) }.getOrNull() ?: return false
+        return uri.scheme == "https" && uri.host == "accounts.google.com"
+    }
+
     class DataUrl(val mimeType: String, val bytes: ByteArray)
 
     /** Decodifica los `data:` que devuelve el motor como recurso de sustitución. */

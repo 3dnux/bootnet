@@ -38,7 +38,14 @@
                 <data android:host="youtube.com" />
                 <data android:host="www.youtube.com" />
                 <data android:host="m.youtube.com" />
+                <data android:host="music.youtube.com" />
                 <data android:host="youtu.be" />
+            </intent-filter>
+            <!-- "Compartir → ShieldTube" desde la app de YouTube u otras. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
             </intent-filter>
         </activity>
 

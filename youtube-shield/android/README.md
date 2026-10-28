@@ -12,7 +12,8 @@ App Android que abre YouTube (`m.youtube.com`) a pantalla completa con **el moto
 | Filtros procedurales | `selector:has-text(...)` |
 
 - Listas: las que Brave activa por defecto **en Android** según su `list_catalog.json`. Se descargan la primera vez y se refrescan cada 24 h; el motor compilado se guarda en caché para arrancar rápido.
-- Los enlaces de YouTube pueden abrirse con ShieldTube (aparece en el selector de apps).
+- Los enlaces de YouTube pueden abrirse con ShieldTube (aparece en el selector de apps) o enviarse con **Compartir → ShieldTube** desde la app de YouTube.
+- **Enlaces copiados:** al abrir o volver a la app, si hay un enlace de YouTube en el portapapeles (vídeo, Short, directo, lista o canal; también `youtu.be` y `music.youtube.com`), pregunta "¿Ver este vídeo?" con el título y el canal (oEmbed de YouTube) y lo abre. No pregunta dos veces por el mismo enlace ni por el vídeo que ya se está viendo, y solo lee el portapapeles cuando cambia lo copiado. Los parámetros de rastreo (`si`, `feature`, `pp`) se quitan; el minuto (`t`) y la lista se conservan.
 - Pantalla completa con giro automático y botón atrás para volver.
 - **Reproducción en segundo plano:** el vídeo sigue sonando al salir de la app o bloquear el móvil, con notificación y controles en la pantalla de bloqueo y en los auriculares (reproducir/pausar/avanzar).
 - Los enlaces externos se abren en el navegador; los `intent://` a la app oficial se ignoran.

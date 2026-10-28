@@ -29,4 +29,9 @@
     <string name="head_status_detector_failed">Error en la detección facial</string>
     <string name="head_status_paused">Seguimiento en pausa</string>
     <string name="head_hint">Mantén pulsado 3D para el seguimiento de cabeza</string>
+    <string name="clip_title_video">¿Ver este vídeo?</string>
+    <string name="clip_title_link">¿Abrir este enlace de YouTube?</string>
+    <string name="clip_open">Ver</string>
+    <string name="clip_dismiss">Ahora no</string>
+    <string name="share_no_link">No hay un enlace de YouTube en lo que compartiste</string>
 </resources>

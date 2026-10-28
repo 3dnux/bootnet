@@ -3,7 +3,9 @@ package dev.bootnet.shieldtube
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.ActivityNotFoundException
+import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
@@ -108,8 +110,75 @@ class MainActivity : Activity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        val url = youtubeUrlFrom(intent) ?: return
+        openUrl(youtubeUrlFrom(intent) ?: return)
+    }
+
+    private fun openUrl(url: String) {
         if (engineReady) webView.loadUrl(url) else pendingUrl = url
+    }
+
+    // --- Enlaces copiados -----------------------------------------------------
+
+    private var clipDialog: AlertDialog? = null
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // Android solo deja leer el portapapeles a la app que tiene el foco.
+        if (hasFocus) offerCopiedLink()
+    }
+
+    /**
+     * Si hay un enlace de YouTube recién copiado, pregunta si abrirlo. Solo se lee
+     * el contenido cuando cambia lo copiado (la marca de tiempo del portapapeles
+     * no avisa al usuario; leer el texto sí muestra el aviso de Android 12+), y
+     * nunca se pregunta dos veces por el mismo enlace.
+     */
+    private fun offerCopiedLink() {
+        if (clipDialog?.isShowing == true) return
+        val clipboard = getSystemService(ClipboardManager::class.java) ?: return
+        val description = clipboard.primaryClipDescription ?: return
+        if (!description.hasMimeType("text/*")) return
+        val stamp = description.timestamp
+        if (stamp != 0L && stamp == prefs.getLong("clip_stamp", -1L)) return
+        prefs.edit().putLong("clip_stamp", stamp).apply()
+
+        val text = clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this)?.toString()
+        val link = YoutubeLinks.find(text) ?: return
+        if (link.url == prefs.getString("clip_offered", null)) return
+        prefs.edit().putString("clip_offered", link.url).apply()
+        val current = YoutubeLinks.videoIdOf(pendingUrl ?: pageUrl)
+        if (link.videoId != null && link.videoId == current) return
+
+        val dialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle(if (link.videoId != null) R.string.clip_title_video else R.string.clip_title_link)
+            .setMessage(link.url)
+            .setPositiveButton(R.string.clip_open) { _, _ -> openUrl(link.url) }
+            .setNegativeButton(R.string.clip_dismiss, null)
+            .show()
+        clipDialog = dialog
+        if (link.videoId != null) showVideoTitle(link, dialog)
+    }
+
+    /** Título y canal del vídeo (oEmbed de YouTube) en el aviso, en cuanto llegan. */
+    private fun showVideoTitle(link: YoutubeLinks.Link, dialog: AlertDialog) {
+        worker.execute {
+            val info = runCatching {
+                val connection = java.net.URL(YoutubeLinks.oEmbedUrl(link)).openConnection() as java.net.HttpURLConnection
+                connection.connectTimeout = 5_000
+                connection.readTimeout = 5_000
+                try {
+                    JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+                } finally {
+                    connection.disconnect()
+                }
+            }.getOrNull() ?: return@execute
+            val title = info.optString("title")
+            val author = info.optString("author_name")
+            if (title.isEmpty()) return@execute
+            runOnUiThread {
+                if (dialog.isShowing) dialog.setMessage(if (author.isEmpty()) title else "$title\n\n$author")
+            }
+        }
     }
 
     // Con reproducción activa, la WebView sigue funcionando al salir o bloquear el móvil.
@@ -152,8 +221,21 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
-    private fun youtubeUrlFrom(intent: Intent?): String? =
-        intent?.dataString?.takeIf { intent.action == Intent.ACTION_VIEW && Net.isAllowedInApp(it) }
+    /** Enlace abierto con la app (VIEW) o compartido con ella (SEND, "Compartir"). */
+    private fun youtubeUrlFrom(intent: Intent?): String? = when (intent?.action) {
+        Intent.ACTION_VIEW -> intent.dataString?.let { data ->
+            YoutubeLinks.find(data)?.url ?: data.takeIf { Net.isAllowedInApp(it) }
+        }
+        Intent.ACTION_SEND -> {
+            val text = intent.getStringExtra(Intent.EXTRA_TEXT)
+            YoutubeLinks.find(text)?.url.also { url ->
+                if (url == null) Toast.makeText(this, R.string.share_no_link, Toast.LENGTH_SHORT).show()
+                // Lo compartido ya se está abriendo: no volver a ofrecerlo desde el portapapeles.
+                else prefs.edit().putString("clip_offered", url).apply()
+            }
+        }
+        else -> null
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun setupWebView() {

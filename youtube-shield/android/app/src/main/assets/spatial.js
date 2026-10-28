@@ -1,25 +1,40 @@
-// Sonido 3D para cualquier audífono: el audio del vídeo pasa por Web Audio y
-// se coloca como dos altavoces virtuales delante del oyente (HRTF, el mismo
-// filtrado binaural que usan los sistemas de audio espacial) más reflexiones de
-// sala desde los lados.
+// Sonido 3D para cualquier audífono: el audio del vídeo pasa por Web Audio y se
+// convierte en un envolvente virtual, como los sistemas de cine en casa para
+// audífonos:
+//
+//   - Graves (< 120 Hz) aparte, sin filtro binaural y con un realce suave: el
+//     HRTF "adelgaza" el bajo y los graves no tienen dirección perceptible.
+//   - Bocinas frontales izquierda/derecha (el estéreo original).
+//   - Bocina central con lo común a los dos canales (voces, diálogos).
+//   - Bocinas traseras con lo que difiere entre canales (ambiente, público,
+//     efectos), decorrelacionadas con retardos distintos.
+//   - Reverberación de sala por convolución con una respuesta generada.
+//
+// Cada bocina virtual se coloca con un PannerNode HRTF (filtrado binaural). Un
+// limitador evita saturación y una compensación medida por nivel hace que
+// activarlo no suene más fuerte.
 //
 // La app fija el nivel en window.__shieldtubeSpatial (0 = apagado, 1 suave,
-// 2 media, 3 fuerte) y lo cambia en vivo con window.shieldtubeSetSpatial(n).
+// 2 media, 3 inmersivo) y lo cambia en vivo con window.shieldtubeSetSpatial(n).
 // Con seguimiento de cabeza, la app llama a window.shieldtubeSetHeadYaw(grados,
-// positivo = cabeza girada a la izquierda): se gira el oyente y los altavoces
-// virtuales se quedan quietos, como en el audio espacial de los AirPods.
+// positivo = cabeza girada a la izquierda): se gira el oyente y las bocinas
+// virtuales se quedan quietas, como en el audio espacial de los AirPods.
 (function () {
   if (window !== window.top) return;
 
-  // makeup: compensa la subida de volumen del procesado (medida con sonido
-  // centrado y lateral) para que activar el 3D no suene más fuerte.
+  // angle: bocinas frontales (±grados). center/surround/reverb: niveles de la
+  // bocina central, las traseras y la sala. bassDb/presenceDb: realces.
+  // makeup: compensación de volumen medida con ruido rosa centrado, lateral y
+  // estéreo ancho.
   var PRESETS = [
     null,
-    { angle: 30, wet: 0.7, room: 0.18, makeup: 0.77 },
-    { angle: 45, wet: 0.9, room: 0.3, makeup: 0.67 },
-    { angle: 60, wet: 1.0, room: 0.45, makeup: 0.6 },
+    { angle: 30, center: 0.35, surround: 0.25, reverb: 0.3, bassDb: 2, presenceDb: 1, makeup: 0.56 },
+    { angle: 40, center: 0.45, surround: 0.45, reverb: 0.5, bassDb: 3, presenceDb: 1.5, makeup: 0.59 },
+    { angle: 50, center: 0.5, surround: 0.7, reverb: 0.95, bassDb: 4, presenceDb: 2, makeup: 0.48 },
   ];
   var DISTANCE = 1.5;
+  var CROSSOVER = 120;
+  var REAR_ANGLE = 110;
   var graphs = new WeakMap();
   var active = null;
   var headYaw = 0;
@@ -50,48 +65,131 @@
     p.positionZ.value = -Math.cos(rad) * DISTANCE;
   }
 
+  function filter(ctx, type, frequency, gainDb) {
+    var f = ctx.createBiquadFilter();
+    f.type = type;
+    f.frequency.value = frequency;
+    if (gainDb !== undefined) f.gain.value = gainDb;
+    return f;
+  }
+
+  function gain(ctx, value) {
+    var g = ctx.createGain();
+    g.gain.value = value;
+    return g;
+  }
+
+  function chain() {
+    for (var i = 0; i < arguments.length - 1; i++) arguments[i].connect(arguments[i + 1]);
+    return arguments[arguments.length - 1];
+  }
+
+  /**
+   * Respuesta al impulso de una sala (~1,8 s): reflexiones tempranas discretas
+   * y cola de ruido con caída exponencial que pierde agudos con el tiempo.
+   * Ruido distinto por canal para que la sala suene ancha. Cada canal se lleva
+   * a energía 1: así el nivel "reverb" es la proporción real de sala.
+   */
+  function roomImpulse(ctx) {
+    var rate = ctx.sampleRate;
+    var length = Math.floor(rate * 1.8);
+    var buffer = ctx.createBuffer(2, length, rate);
+    for (var ch = 0; ch < 2; ch++) {
+      var data = buffer.getChannelData(ch);
+      for (var r = 0; r < 8; r++) {
+        var at = Math.floor(rate * (0.007 + Math.random() * 0.063));
+        data[at] += (r % 2 ? -1 : 1) * (0.5 - r * 0.045);
+      }
+      var smooth = 0;
+      var tailStart = Math.floor(rate * 0.02);
+      for (var i = tailStart; i < length; i++) {
+        var t = (i - tailStart) / rate;
+        var envelope = Math.exp(-6.9 * t / 1.6) * Math.min(1, t / 0.01);
+        var damping = 0.9 - 0.75 * (i / length);
+        smooth += damping * ((Math.random() * 2 - 1) - smooth);
+        data[i] += smooth * envelope * 0.6;
+      }
+      var energy = 0;
+      for (var k = 0; k < length; k++) energy += data[k] * data[k];
+      var scale = 1 / Math.sqrt(energy);
+      for (var j = 0; j < length; j++) data[j] *= scale;
+    }
+    return buffer;
+  }
+
+  // Divisor de frecuencias Linkwitz-Riley de 4.º orden (dos Butterworth en
+  // serie): graves y resto vuelven a sumar plano.
+  function crossover(ctx, input) {
+    var low = chain(input, filter(ctx, 'lowpass', CROSSOVER), filter(ctx, 'lowpass', CROSSOVER));
+    var high = chain(input, filter(ctx, 'highpass', CROSSOVER), filter(ctx, 'highpass', CROSSOVER));
+    return { low: low, high: high };
+  }
+
   function build(video) {
     var ctx = new AudioContext({ latencyHint: 'playback' });
     var source = ctx.createMediaElementSource(video);
-    var dry = ctx.createGain();
-    var wet = ctx.createGain();
-    var out = ctx.createGain();
+    var dry = gain(ctx, 1);
+    var wet = gain(ctx, 0);
+    var out = gain(ctx, 1);
     var limiter = ctx.createDynamicsCompressor();
     limiter.threshold.value = -2;
     limiter.knee.value = 0;
     limiter.ratio.value = 20;
     limiter.attack.value = 0.003;
     limiter.release.value = 0.1;
+    chain(source, dry, out);
 
-    source.connect(dry);
-    dry.connect(out);
+    var bus = gain(ctx, 1);
+    var presence = filter(ctx, 'highshelf', 8000, 0);
+    chain(bus, presence, wet, out);
+    chain(out, limiter, ctx.destination);
+
+    var bands = crossover(ctx, source);
+    var bass = filter(ctx, 'lowshelf', 80, 0);
+    chain(bands.low, bass, bus);
 
     var split = ctx.createChannelSplitter(2);
-    source.connect(split);
+    bands.high.connect(split);
+
+    // Frontales.
     var front = [panner(ctx), panner(ctx)];
-    var rooms = [];
-    for (var ch = 0; ch < 2; ch++) {
-      split.connect(front[ch], ch);
-      front[ch].connect(wet);
-      // Reflexión: copia retrasada y apagada que llega desde el lado contrario.
-      var delay = ctx.createDelay(0.1);
-      delay.delayTime.value = 0.017 + ch * 0.006;
-      var lowpass = ctx.createBiquadFilter();
-      lowpass.type = 'lowpass';
-      lowpass.frequency.value = 4500;
-      var gain = ctx.createGain();
-      var side = panner(ctx);
-      split.connect(delay, ch);
-      delay.connect(lowpass);
-      lowpass.connect(gain);
-      gain.connect(side);
-      side.connect(wet);
-      rooms.push({ gain: gain, panner: side, angle: ch === 0 ? 110 : -110 });
-    }
-    wet.connect(out);
-    out.connect(limiter);
-    limiter.connect(ctx.destination);
-    return { ctx: ctx, dry: dry, wet: wet, out: out, front: front, rooms: rooms };
+    split.connect(front[0], 0);
+    split.connect(front[1], 1);
+    front[0].connect(bus);
+    front[1].connect(bus);
+
+    // Central: (L + R) / 2.
+    var centerGain = gain(ctx, 0);
+    var center = panner(ctx);
+    split.connect(gain(ctx, 0.5), 0).connect(centerGain);
+    split.connect(gain(ctx, 0.5), 1).connect(centerGain);
+    chain(centerGain, center, bus);
+
+    // Traseras: (L − R) / 2, con signo y retardo distintos a cada lado.
+    var side = gain(ctx, 1);
+    split.connect(gain(ctx, 0.5), 0).connect(side);
+    split.connect(gain(ctx, -0.5), 1).connect(side);
+    var rears = [];
+    [{ angle: -REAR_ANGLE, sign: 1, delay: 0.011 }, { angle: REAR_ANGLE, sign: -1, delay: 0.017 }].forEach(function (r) {
+      var delay = ctx.createDelay(0.05);
+      delay.delayTime.value = r.delay;
+      var amount = gain(ctx, 0);
+      var p = panner(ctx);
+      chain(side, gain(ctx, r.sign), delay, filter(ctx, 'lowpass', 6500), amount, p, bus);
+      rears.push({ gain: amount, panner: p, angle: r.angle });
+    });
+
+    // Sala.
+    var convolver = ctx.createConvolver();
+    convolver.normalize = false;
+    convolver.buffer = roomImpulse(ctx);
+    var reverb = gain(ctx, 0);
+    chain(bands.high, convolver, filter(ctx, 'highpass', 180), reverb, bus);
+
+    return {
+      ctx: ctx, dry: dry, wet: wet, out: out, bass: bass, presence: presence,
+      front: front, center: center, centerGain: centerGain, rears: rears, reverb: reverb,
+    };
   }
 
   // Gira al oyente: con la cabeza a la izquierda, el frente de la escena queda a
@@ -116,20 +214,28 @@
 
   function apply(graph) {
     var preset = PRESETS[level()];
+    var t = graph.ctx.currentTime;
+    // Rampa corta para que cambiar de nivel no dé chasquido.
+    var ramp = function (param, value) { param.setTargetAtTime(value, t, 0.05); };
     if (!preset) {
-      graph.dry.gain.value = 1;
-      graph.wet.gain.value = 0;
-      graph.out.gain.value = 1;
+      ramp(graph.dry.gain, 1);
+      ramp(graph.wet.gain, 0);
+      ramp(graph.out.gain, 1);
       return;
     }
-    graph.dry.gain.value = 1 - preset.wet;
-    graph.wet.gain.value = preset.wet;
-    graph.out.gain.value = preset.makeup;
+    ramp(graph.dry.gain, 0);
+    ramp(graph.wet.gain, 1);
+    ramp(graph.out.gain, preset.makeup);
+    ramp(graph.bass.gain, preset.bassDb);
+    ramp(graph.presence.gain, preset.presenceDb);
+    ramp(graph.centerGain.gain, preset.center);
+    ramp(graph.reverb.gain, preset.reverb);
     place(graph.front[0], -preset.angle);
     place(graph.front[1], preset.angle);
-    graph.rooms.forEach(function (room) {
-      room.gain.gain.value = preset.room;
-      place(room.panner, room.angle);
+    place(graph.center, 0);
+    graph.rears.forEach(function (rear) {
+      ramp(rear.gain.gain, preset.surround);
+      place(rear.panner, rear.angle);
     });
     orient(graph);
   }

@@ -17,13 +17,26 @@ App Android que abre YouTube (`m.youtube.com`) a pantalla completa con **el moto
 - Pantalla completa con giro automático y botón atrás para volver.
 - **Reproducción en segundo plano:** el vídeo sigue sonando al salir de la app o bloquear el móvil, con notificación y controles en la pantalla de bloqueo y en los auriculares (reproducir/pausar/avanzar).
 - Los enlaces externos se abren en el navegador; los `intent://` a la app oficial se ignoran.
-- **Sonido 3D** para cualquier audífono: botón "3D" en la página del vídeo y en la notificación (apagado → suave → media → fuerte).
+- **Sonido 3D** para cualquier audífono: botón "3D" en la página del vídeo y en la notificación (apagado → suave → media → inmersivo).
 
 ## Sonido 3D
 
-`assets/spatial.js` pasa el audio del vídeo por Web Audio: cada canal del estéreo se coloca como un altavoz virtual delante del oyente (±30°, ±45° o ±60° según la intensidad) con `PannerNode` en modo HRTF, el filtrado binaural de los sistemas de audio espacial, más reflexiones de sala retrasadas que llegan desde los lados (±110°). Un limitador evita saturación, y una compensación de volumen medida por intensidad hace que activarlo no suene más fuerte (±1,5 dB).
+`assets/spatial.js` convierte el estéreo del vídeo en un envolvente virtual, como los sistemas de cine en casa para audífonos. Todo con Web Audio:
 
-- El sonido sale "de delante" en vez de dentro de la cabeza. YouTube es estéreo, así que es una simulación, no Dolby Atmos.
+| Parte | Cómo | Para qué |
+|---|---|---|
+| Graves (< 120 Hz) | Divisor Linkwitz-Riley de 4.º orden, sin HRTF, realce de +2/+3/+4 dB | El bajo conserva cuerpo y golpe (el HRTF lo adelgaza) |
+| Bocinas frontales | L y R a ±30°, ±40° o ±50° | Escenario estéreo delante de ti |
+| Bocina central | (L+R)/2 a 0° | Voces y diálogos anclados delante |
+| Bocinas traseras | (L−R)/2 a ±110°, con signo y retardo distintos (11/17 ms) y paso bajo de 6,5 kHz | Ambiente, público y efectos alrededor |
+| Sala | Convolución con una respuesta generada de 1,8 s (reflexiones tempranas + cola que pierde agudos), decorrelacionada por canal | Sensación de estar en un lugar real |
+| Brillo | Realce de agudos de +1/+1,5/+2 dB a 8 kHz | Claridad |
+
+Cada bocina virtual es un `PannerNode` en modo HRTF (filtrado binaural). Un limitador evita saturación, y una compensación medida con ruido rosa (centrado, lateral y estéreo ancho) deja cada nivel a ±1,1 dB del original. Los cambios de nivel van con rampa para no dar chasquidos.
+
+Medido en Chromium: la correlación entre oídos de un sonido centrado baja de 1,0 (sin efecto) a 0,98 / 0,95 / 0,85 (suave / media / inmersivo). Cuanto más baja, más amplio y envolvente se percibe.
+
+- El sonido sale "de delante" y te rodea, en vez de quedarse dentro de la cabeza. YouTube es estéreo, así que es una simulación, no Dolby Atmos.
 - Se recuerda entre sesiones y funciona en segundo plano.
 - Solo se aplica a audio de MediaSource (`blob:`), que es lo que usa YouTube; cualquier otro audio se deja intacto para que no salga en silencio.
 - Si se combina con el ecualizador o el "360 Reality Audio" de la app de Sony, el efecto se suma. Mejor usar solo uno de los dos procesados espaciales.

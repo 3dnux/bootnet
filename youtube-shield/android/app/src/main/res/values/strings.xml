@@ -13,7 +13,7 @@
     <string name="spatial_off">apagado</string>
     <string name="spatial_soft">suave</string>
     <string name="spatial_medium">media</string>
-    <string name="spatial_strong">fuerte</string>
+    <string name="spatial_strong">inmersivo</string>
     <string name="head_on_sensor">Seguimiento de cabeza activado con el sensor de tus audífonos</string>
     <string name="head_on_camera">Seguimiento de cabeza activado con la cámara frontal (mientras miras la pantalla)</string>
     <string name="head_off">Seguimiento de cabeza desactivado</string>

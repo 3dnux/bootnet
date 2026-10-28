@@ -2,7 +2,7 @@ package dev.bootnet.shieldtube
 
 import android.content.Context
 
-/** Nivel de Sonido 3D (assets/spatial.js): 0 apagado, 1 suave, 2 media, 3 fuerte. */
+/** Nivel de Sonido 3D (assets/spatial.js): 0 apagado, 1 suave, 2 media, 3 inmersivo. */
 object SpatialAudio {
     private const val PREFS = "shieldtube"
     private const val KEY = "spatial_level"
@@ -15,7 +15,7 @@ object SpatialAudio {
     fun level(context: Context): Int =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt(KEY, 0).coerceIn(0, NAMES.size - 1)
 
-    /** Pasa al siguiente nivel (apagado → suave → media → fuerte → apagado). */
+    /** Pasa al siguiente nivel (apagado → suave → media → inmersivo → apagado). */
     fun cycle(context: Context): Int = setLevel(context, (level(context) + 1) % NAMES.size)
 
     fun setLevel(context: Context, level: Int): Int {

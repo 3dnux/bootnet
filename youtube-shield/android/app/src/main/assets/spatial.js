@@ -5,14 +5,16 @@
 //   - Graves (< 120 Hz) aparte, sin filtro binaural y con un realce suave: el
 //     HRTF "adelgaza" el bajo y los graves no tienen dirección perceptible.
 //   - Bocinas frontales izquierda/derecha (el estéreo original).
-//   - Bocina central con lo común a los dos canales (voces, diálogos).
-//   - Bocinas traseras con lo que difiere entre canales (ambiente, público,
-//     efectos), decorrelacionadas con retardos distintos.
-//   - Reverberación de sala por convolución con una respuesta generada.
+//   - Centro reforzado con lo común a los dos canales (voces, diálogos).
+//   - Traseras con lo que difiere entre canales (ambiente, público, efectos),
+//     decorrelacionadas con retardos distintos.
+//   - Sala con una red de retardos realimentados (tipo Freeverb), barata y
+//     calculada en el hilo de audio.
 //
 // Cada bocina virtual se coloca con un PannerNode HRTF (filtrado binaural). Un
 // limitador evita saturación y una compensación medida por nivel hace que
-// activarlo no suene más fuerte.
+// activarlo no suene más fuerte. Si el móvil no da abasto y el audio se
+// corta, pasa solo a un modo ligero (ver watchGlitches).
 //
 // La app fija el nivel en window.__shieldtubeSpatial (0 = apagado, 1 suave,
 // 2 media, 3 inmersivo) y lo cambia en vivo con window.shieldtubeSetSpatial(n).
@@ -28,13 +30,12 @@
   // estéreo ancho.
   var PRESETS = [
     null,
-    { angle: 30, center: 0.35, surround: 0.25, reverb: 0.3, bassDb: 2, presenceDb: 1, makeup: 0.56 },
-    { angle: 40, center: 0.45, surround: 0.45, reverb: 0.5, bassDb: 3, presenceDb: 1.5, makeup: 0.59 },
-    { angle: 50, center: 0.5, surround: 0.7, reverb: 0.95, bassDb: 4, presenceDb: 2, makeup: 0.48 },
+    { angle: 30, center: 0.35, surround: 0.25, reverb: 0.14, bassDb: 2, presenceDb: 1, makeup: 0.51 },
+    { angle: 40, center: 0.45, surround: 0.45, reverb: 0.25, bassDb: 3, presenceDb: 1.5, makeup: 0.52 },
+    { angle: 50, center: 0.5, surround: 0.7, reverb: 0.45, bassDb: 4, presenceDb: 2, makeup: 0.45 },
   ];
   var DISTANCE = 1.5;
   var CROSSOVER = 120;
-  var REAR_ANGLE = 110;
   var graphs = new WeakMap();
   var active = null;
   var headYaw = 0;
@@ -85,36 +86,30 @@
   }
 
   /**
-   * Respuesta al impulso de una sala (~1,8 s): reflexiones tempranas discretas
-   * y cola de ruido con caída exponencial que pierde agudos con el tiempo.
-   * Ruido distinto por canal para que la sala suene ancha. Cada canal se lleva
-   * a energía 1: así el nivel "reverb" es la proporción real de sala.
+   * Sala tipo Freeverb reducida: por canal, dos filtros peine (retardo con
+   * realimentación y paso bajo en el lazo, que apaga los agudos como una sala
+   * real) y un pasa-todo para difuminar. El canal derecho usa retardos algo
+   * distintos para que la sala suene ancha. Todo corre en el hilo de audio
+   * (la convolución larga usaba un hilo aparte que Android puede frenar, y eso
+   * cortaba el sonido). Cola de ~0,9 s.
    */
-  function roomImpulse(ctx) {
-    var rate = ctx.sampleRate;
-    var length = Math.floor(rate * 1.8);
-    var buffer = ctx.createBuffer(2, length, rate);
-    for (var ch = 0; ch < 2; ch++) {
-      var data = buffer.getChannelData(ch);
-      for (var r = 0; r < 8; r++) {
-        var at = Math.floor(rate * (0.007 + Math.random() * 0.063));
-        data[at] += (r % 2 ? -1 : 1) * (0.5 - r * 0.045);
-      }
-      var smooth = 0;
-      var tailStart = Math.floor(rate * 0.02);
-      for (var i = tailStart; i < length; i++) {
-        var t = (i - tailStart) / rate;
-        var envelope = Math.exp(-6.9 * t / 1.6) * Math.min(1, t / 0.01);
-        var damping = 0.9 - 0.75 * (i / length);
-        smooth += damping * ((Math.random() * 2 - 1) - smooth);
-        data[i] += smooth * envelope * 0.6;
-      }
-      var energy = 0;
-      for (var k = 0; k < length; k++) energy += data[k] * data[k];
-      var scale = 1 / Math.sqrt(energy);
-      for (var j = 0; j < length; j++) data[j] *= scale;
-    }
-    return buffer;
+  function roomNetwork(ctx) {
+    var input = gain(ctx, 1);
+    var output = ctx.createChannelMerger(2);
+    [0, 23].forEach(function (spread, ch) {
+      var sum = gain(ctx, 0.5);
+      [1277, 1617].forEach(function (samples) {
+        var delay = ctx.createDelay(0.1);
+        delay.delayTime.value = (samples + spread) / 44100;
+        var damping = filter(ctx, 'lowpass', 4500);
+        var feedback = gain(ctx, 0.8);
+        chain(input, delay, damping, feedback, delay);
+        damping.connect(sum);
+      });
+      var diffused = chain(sum, filter(ctx, 'allpass', 1200 + ch * 170));
+      diffused.connect(output, 0, ch);
+    });
+    return { input: input, output: output };
   }
 
   // Divisor de frecuencias Linkwitz-Riley de 4.º orden (dos Butterworth en
@@ -158,37 +153,50 @@
     front[0].connect(bus);
     front[1].connect(bus);
 
-    // Central: (L + R) / 2.
+    // Central: (L + R) / 2 a las dos frontales por igual, que la sitúan en el
+    // centro sin gastar otro filtro HRTF.
     var centerGain = gain(ctx, 0);
-    var center = panner(ctx);
     split.connect(gain(ctx, 0.5), 0).connect(centerGain);
     split.connect(gain(ctx, 0.5), 1).connect(centerGain);
-    chain(centerGain, center, bus);
+    centerGain.connect(front[0]);
+    centerGain.connect(front[1]);
 
-    // Traseras: (L − R) / 2, con signo y retardo distintos a cada lado.
+    // Traseras: (L − R) / 2, con signo y retardo distintos a cada lado. Sin
+    // HRTF (era lo más caro): cada una llega a su oído y, más tarde y sin
+    // agudos (la "sombra" de la cabeza), al otro. Para envolver basta.
     var side = gain(ctx, 1);
     split.connect(gain(ctx, 0.5), 0).connect(side);
     split.connect(gain(ctx, -0.5), 1).connect(side);
+    var rearMix = ctx.createChannelMerger(2);
+    rearMix.connect(bus);
     var rears = [];
-    [{ angle: -REAR_ANGLE, sign: 1, delay: 0.011 }, { angle: REAR_ANGLE, sign: -1, delay: 0.017 }].forEach(function (r) {
+    [{ ear: 0, sign: 1, delay: 0.011 }, { ear: 1, sign: -1, delay: 0.017 }].forEach(function (r) {
       var delay = ctx.createDelay(0.05);
       delay.delayTime.value = r.delay;
       var amount = gain(ctx, 0);
-      var p = panner(ctx);
-      chain(side, gain(ctx, r.sign), delay, filter(ctx, 'lowpass', 6500), amount, p, bus);
-      rears.push({ gain: amount, panner: p, angle: r.angle });
+      chain(side, gain(ctx, r.sign), delay, filter(ctx, 'lowpass', 6500), amount);
+      amount.connect(rearMix, 0, r.ear);
+      var across = ctx.createDelay(0.01);
+      across.delayTime.value = 0.00055;
+      chain(amount, across, filter(ctx, 'lowpass', 2200), gain(ctx, 0.5)).connect(rearMix, 0, 1 - r.ear);
+      rears.push({ gain: amount });
     });
 
     // Sala.
-    var convolver = ctx.createConvolver();
-    convolver.normalize = false;
-    convolver.buffer = roomImpulse(ctx);
+    var room = roomNetwork(ctx);
     var reverb = gain(ctx, 0);
-    chain(bands.high, convolver, filter(ctx, 'highpass', 180), reverb, bus);
+    bands.high.connect(room.input);
+    chain(room.output, filter(ctx, 'highpass', 180), reverb, bus);
+
+    // Modo ligero: sin sala ni traseras (lo más caro después de las frontales).
+    var goLite = function () {
+      bands.high.disconnect(room.input);
+      side.disconnect();
+    };
 
     return {
       ctx: ctx, dry: dry, wet: wet, out: out, bass: bass, presence: presence,
-      front: front, center: center, centerGain: centerGain, rears: rears, reverb: reverb,
+      front: front, centerGain: centerGain, rears: rears, reverb: reverb, goLite: goLite, lite: false,
     };
   }
 
@@ -232,12 +240,42 @@
     ramp(graph.reverb.gain, preset.reverb);
     place(graph.front[0], -preset.angle);
     place(graph.front[1], preset.angle);
-    place(graph.center, 0);
     graph.rears.forEach(function (rear) {
       ramp(rear.gain.gain, preset.surround);
-      place(rear.panner, rear.angle);
     });
     orient(graph);
+  }
+
+  /**
+   * Si el móvil no llega a calcular el audio a tiempo, Chromium rellena con
+   * silencio (se oye como cortes) y lo cuenta (playbackStats.underrunEvents en
+   * Chromium; playoutStats.fallbackFramesEvents en el estándar). Con varios
+   * cortes seguidos se pasa a modo ligero en vez de seguir cortando.
+   */
+  function underruns(ctx) {
+    if (ctx.playbackStats && 'underrunEvents' in ctx.playbackStats) return ctx.playbackStats.underrunEvents;
+    if (ctx.playoutStats && 'fallbackFramesEvents' in ctx.playoutStats) return ctx.playoutStats.fallbackFramesEvents;
+    return null;
+  }
+
+  function watchGlitches(graph) {
+    if (underruns(graph.ctx) === null) return;
+    var history = [];
+    var started = Date.now();
+    var timer = setInterval(function () {
+      if (graph.lite) {
+        clearInterval(timer);
+        return;
+      }
+      if (Date.now() - started < 3000 || graph.ctx.state !== 'running') return;
+      history.push(underruns(graph.ctx));
+      if (history.length > 5) history.shift();
+      if (history.length === 5 && history[4] - history[0] >= 3) {
+        graph.lite = true;
+        graph.goLite();
+        console.warn('[shieldtube] Cortes de audio: Sonido 3D en modo ligero');
+      }
+    }, 2000);
   }
 
   // Se engancha al vídeo la primera vez que suena con el 3D activado. Después el
@@ -249,6 +287,7 @@
       if (!level() || !canProcess(video)) return null;
       graph = build(video);
       graphs.set(video, graph);
+      watchGlitches(graph);
     }
     active = graph;
     apply(graph);

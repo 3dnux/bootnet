@@ -29,14 +29,19 @@ App Android que abre YouTube (`m.youtube.com`) a pantalla completa con **el moto
 | Bocinas frontales | L y R a ±30°, ±40° o ±50° | Escenario estéreo delante de ti |
 | Centro reforzado | (L+R)/2 a las dos frontales por igual | Voces y diálogos anclados delante |
 | Traseras | (L−R)/2 con signo y retardo distintos (11/17 ms), paso bajo de 6,5 kHz y "sombra" de la cabeza hacia el otro oído (0,55 ms, paso bajo de 2,2 kHz) | Ambiente, público y efectos alrededor |
-| Sala | Red de retardos realimentados tipo Freeverb (2 peines con amortiguación + 1 pasa-todo por canal, ~1 s), distinta por canal | Sensación de estar en un lugar real |
+| Sala | Convolución con una respuesta generada de 0,45 s (reflexiones tempranas + cola de ruido que pierde agudos), distinta por canal | Sensación de estar en un lugar real |
 | Brillo | Realce de agudos de +1/+1,5/+2 dB a 8 kHz | Claridad |
 
 Las frontales son `PannerNode` en modo HRTF (filtrado binaural). Un limitador evita saturación, y una compensación medida con ruido rosa (centrado, lateral y estéreo ancho) deja cada nivel a ±1,3 dB del original. Los cambios de nivel van con rampa para no dar chasquidos.
 
-Medido en Chromium: la correlación entre oídos de un sonido centrado baja de 1,0 (sin efecto) a 0,99 / 0,95 / 0,85 (suave / media / inmersivo). Cuanto más baja, más amplio y envolvente se percibe.
+Medido en Chromium: la correlación entre oídos de un sonido centrado baja de 1,0 (sin efecto) a 0,98 / 0,96 / 0,83 (suave / media / inmersivo). Cuanto más baja, más amplio y envolvente se percibe.
 
-**Rendimiento.** La 0.7.0 usaba una convolución de 1,8 s, cuya cola Chromium calcula en un hilo aparte que Android puede frenar, más 5 filtros HRTF; en el móvil el audio se cortaba. Ahora todo corre en el hilo de audio, con solo 2 HRTF. Renderizando 30 s sin tiempo real cuesta un 6-7 % del tiempo real, igual que la 0.6.1, frente al 9-10 % de la 0.7.0. Si aun así Chromium informa de cortes (`playbackStats.underrunEvents`: 3 o más en 8 s), el 3D pasa solo a un modo ligero, sin sala ni traseras.
+**Rendimiento y calidad.** Historial de la sala:
+- **0.7.0:** convolución de 1,8 s más 5 filtros HRTF. Demasiado trabajo para el hilo de audio del móvil, y el sonido se cortaba.
+- **0.7.1:** red de peines realimentados (tipo Freeverb), barata pero con una cola tonal que sonaba metálica. En la respuesta al impulso, su "lisura espectral" (de 0 = tonos puros a 1 = ruido liso) era 0,00.
+- **Ahora:** convolución corta de 0,45 s. Su lisura es 0,54, más natural incluso que la de 1,8 s (0,41), y solo hay 2 HRTF.
+
+Renderizando 30 s sin tiempo real cuesta un 6-7 % del tiempo real, igual que la 0.6.1, frente al 9-10 % de la 0.7.0. Si aun así Chromium informa de cortes (`playbackStats.underrunEvents`: 3 o más en 8 s), el 3D pasa solo a un modo ligero, sin sala ni traseras.
 
 - El sonido sale "de delante" y te rodea, en vez de quedarse dentro de la cabeza. YouTube es estéreo, así que es una simulación, no Dolby Atmos.
 - Se recuerda entre sesiones y funciona en segundo plano.

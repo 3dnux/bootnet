@@ -8,8 +8,7 @@
 //   - Centro reforzado con lo común a los dos canales (voces, diálogos).
 //   - Traseras con lo que difiere entre canales (ambiente, público, efectos),
 //     decorrelacionadas con retardos distintos.
-//   - Sala con una red de retardos realimentados (tipo Freeverb), barata y
-//     calculada en el hilo de audio.
+//   - Sala por convolución con una respuesta corta generada (0,45 s).
 //
 // Cada bocina virtual se coloca con un PannerNode HRTF (filtrado binaural). Un
 // limitador evita saturación y una compensación medida por nivel hace que
@@ -30,9 +29,9 @@
   // estéreo ancho.
   var PRESETS = [
     null,
-    { angle: 30, center: 0.35, surround: 0.25, reverb: 0.14, bassDb: 2, presenceDb: 1, makeup: 0.51 },
-    { angle: 40, center: 0.45, surround: 0.45, reverb: 0.25, bassDb: 3, presenceDb: 1.5, makeup: 0.52 },
-    { angle: 50, center: 0.5, surround: 0.7, reverb: 0.45, bassDb: 4, presenceDb: 2, makeup: 0.45 },
+    { angle: 30, center: 0.35, surround: 0.25, reverb: 0.3, bassDb: 2, presenceDb: 1, makeup: 0.51 },
+    { angle: 40, center: 0.45, surround: 0.45, reverb: 0.5, bassDb: 3, presenceDb: 1.5, makeup: 0.52 },
+    { angle: 50, center: 0.5, surround: 0.7, reverb: 1.15, bassDb: 4, presenceDb: 2, makeup: 0.43 },
   ];
   var DISTANCE = 1.5;
   var CROSSOVER = 120;
@@ -86,30 +85,46 @@
   }
 
   /**
-   * Sala tipo Freeverb reducida: por canal, dos filtros peine (retardo con
-   * realimentación y paso bajo en el lazo, que apaga los agudos como una sala
-   * real) y un pasa-todo para difuminar. El canal derecho usa retardos algo
-   * distintos para que la sala suene ancha. Todo corre en el hilo de audio
-   * (la convolución larga usaba un hilo aparte que Android puede frenar, y eso
-   * cortaba el sonido). Cola de ~0,9 s.
+   * Sala por convolución con una respuesta corta generada (0,45 s):
+   * reflexiones tempranas discretas y cola de ruido con caída exponencial que
+   * pierde agudos con el tiempo, distinta por canal para que suene ancha y con
+   * energía 1 por canal (el nivel "reverb" es la proporción real de sala).
+   *
+   * Corta a propósito: la de 1,8 s (0.7.0) pesaba demasiado y el audio se
+   * cortaba en el móvil, y una red de peines realimentados (0.7.1) era barata
+   * pero sonaba metálica (cola tonal). Esta cuesta como los peines y suena a
+   * sala de verdad.
    */
   function roomNetwork(ctx) {
     var input = gain(ctx, 1);
-    var output = ctx.createChannelMerger(2);
-    [0, 23].forEach(function (spread, ch) {
-      var sum = gain(ctx, 0.5);
-      [1277, 1617].forEach(function (samples) {
-        var delay = ctx.createDelay(0.1);
-        delay.delayTime.value = (samples + spread) / 44100;
-        var damping = filter(ctx, 'lowpass', 4500);
-        var feedback = gain(ctx, 0.8);
-        chain(input, delay, damping, feedback, delay);
-        damping.connect(sum);
-      });
-      var diffused = chain(sum, filter(ctx, 'allpass', 1200 + ch * 170));
-      diffused.connect(output, 0, ch);
-    });
-    return { input: input, output: output };
+    var rate = ctx.sampleRate;
+    var length = Math.floor(rate * 0.45);
+    var buffer = ctx.createBuffer(2, length, rate);
+    for (var ch = 0; ch < 2; ch++) {
+      var data = buffer.getChannelData(ch);
+      for (var r = 0; r < 8; r++) {
+        var at = Math.floor(rate * (0.005 + Math.random() * 0.04));
+        data[at] += (r % 2 ? -1 : 1) * (0.5 - r * 0.045);
+      }
+      var smooth = 0;
+      var tailStart = Math.floor(rate * 0.012);
+      for (var i = tailStart; i < length; i++) {
+        var t = (i - tailStart) / rate;
+        var envelope = Math.exp(-6.9 * t / 0.5) * Math.min(1, t / 0.008);
+        var damping = 0.85 - 0.6 * (i / length);
+        smooth += damping * ((Math.random() * 2 - 1) - smooth);
+        data[i] += smooth * envelope * 0.6;
+      }
+      var energy = 0;
+      for (var k = 0; k < length; k++) energy += data[k] * data[k];
+      var scale = 1 / Math.sqrt(energy);
+      for (var j = 0; j < length; j++) data[j] *= scale;
+    }
+    var convolver = ctx.createConvolver();
+    convolver.normalize = false;
+    convolver.buffer = buffer;
+    input.connect(convolver);
+    return { input: input, output: convolver };
   }
 
   // Divisor de frecuencias Linkwitz-Riley de 4.º orden (dos Butterworth en
